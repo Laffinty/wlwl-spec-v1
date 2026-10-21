@@ -192,10 +192,47 @@ def spec_files():
     return out
 
 
+def _ignored_dir_names():
+    """要跳过的目录名。
+
+    默认集之外,还可以用 `WLWL_SPEC_IGNORE_DIRS` 追加(逗号分隔)。
+    """
+    names = {
+        ".git",
+        "target",
+        "node_modules",
+        ".scratch",
+        "__pycache__",
+    }
+    extra = os.environ.get("WLWL_SPEC_IGNORE_DIRS", "")
+    for n in extra.split(","):
+        n = n.strip()
+        if n:
+            names.add(n)
+    return names
+
+
 def all_md_files():
+    """本仓的 .md 文件。
+
+    ⚠ **不进入嵌套的 git 仓库。** CI 会把上游实现仓 checkout 到工作区里
+    (规范仓的 workflow:`upstream/`),那是**另一个仓库**的文档 —— 它的体例
+    (全角中文标点等)与本仓的规范文本不同,扫它只会制造 1400+ 条假阳性。
+    判据:某个子目录**自带 `.git`** ⇒ 它是另一个仓库的根 ⇒ 整棵子树跳过。
+    """
+    ignore = _ignored_dir_names()
     out = []
     for root, dirs, names in os.walk(REPO):
-        dirs[:] = [d for d in dirs if d not in (".git", "target", "node_modules", ".scratch")]
+        pruned = []
+        for d in dirs:
+            if d in ignore:
+                continue
+            sub = os.path.join(root, d)
+            if sub != REPO and os.path.exists(os.path.join(sub, ".git")):
+                # 另一个 git 仓库的根 —— 整棵子树不进检查范围。
+                continue
+            pruned.append(d)
+        dirs[:] = pruned
         for n in sorted(names):
             if n.endswith(".md"):
                 p = os.path.join(root, n)
