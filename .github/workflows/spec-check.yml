@@ -26,14 +26,17 @@ concurrency:
 env:
   # 上游基线:**完整 40 位 SHA**。
   #
-  # ⚠⚠ 这里**不能写缩写**(`f15051d`)。`actions/checkout` 拿到缩写 SHA 时
+  # ⚠⚠ 这里**不能写缩写**(`5f8067f`)。`actions/checkout` 拿到缩写 SHA 时
   # 认不出它是提交 —— 它会退化成「当分支 / 标签找」,于是 fetch 的是
-  # `+refs/heads/f15051d*` 与 `+refs/tags/f15051d*`,两者都不存在
+  # `+refs/heads/5f8067f*` 与 `+refs/tags/5f8067f*`,两者都不存在
   # ⇒ `git fetch` exit 1 ⇒ job 直接红(2026-10-21 首次运行即如此)。
   # 短形式只用于**人读**与下面的 grep 核对。
-  WLWL_UPSTREAM_REF: f15051d4231d5acd63d4542c7df7a24d0551162f
+  #
+  # ⚠ 这条基线**必须含 v1.0 语义**:钉在没有 `E0103` 的提交上,第 7 项
+  # 「示例有效性」对 v1.0 语义**没有鉴别力**(v1.0 专属的示例错误会绿)。
+  WLWL_UPSTREAM_REF: 5f8067f1a1437d45f474b0b2d911dd1483b480f5
   # 各册册首「上游基线」行记录的短形式(7 位)—— 核对与 grep 用它。
-  WLWL_UPSTREAM_SHORT: f15051d
+  WLWL_UPSTREAM_SHORT: 5f8067f
 
 jobs:
   check:
