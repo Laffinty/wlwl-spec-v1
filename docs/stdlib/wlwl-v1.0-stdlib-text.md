@@ -105,7 +105,7 @@
 
 本册**唯一**的跨册差异登记是:`ERR` 的产生与消费规则。语言核心册 §8.6 规定"未消费的 `ERR` **不得**被丢弃",本册各章的「失败」列**只**描述成员自身在失败时**返回什么**,**不**复述 §8.6 —— `ERR` 值的丢弃与报告一律由 §8.6 承担。
 
-> 上游基线:Laffinty/wlwl 提交 5f8067f(2026-10-22,含 v1.0 语义第一批:`D-01`/`E0103` 与 `X-05` 收敛)。
+> 上游基线:Laffinty/wlwl 提交 56b9fb6(2026-10-22,含 v1.0 语义第一批:`D-01`/`E0103`、`X-05` 与 `X-09` 收敛)。
 
 ## 12 `std.text` —— Unicode 大小写与规范规范化
 
@@ -113,7 +113,7 @@
 
 本命名空间与全局内建**并存**,标准库**不替换**全局内建 —— 替换是破坏性变更(既有程序里非 ASCII 字符的大小写行为会变)。调用方按需要显式选:`UPPER` 快且只管 ASCII,`TO_UPPER` 全 Unicode。
 
-本章的 Unicode 数据与切分口径以 **UCD 18.0.0** 与 **UAX #29** 为准;参考实现是 `Laffinty/wlwl`(基线提交 `5f8067f`,见本册 §0 的「上游基线」行)。
+本章的 Unicode 数据与切分口径以 **UCD 18.0.0** 与 **UAX #29** 为准;参考实现是 `Laffinty/wlwl`(基线提交 `56b9fb6`,见本册 §0 的「上游基线」行)。
 
 | 签名 | 语义 | 失败 | 复杂度 | 层 |
 |---|---|---|---|---|
@@ -220,7 +220,7 @@ PRINT(WIDTH("日本"));            // 4
 
 选错上下文的转义(例如拿 URL 转义去填 HTML 文本)**不是**保守,是**错误**。
 
-本章的语义参照 WHATWG HTML / WHATWG URL、CSSOM(W3C REC cssom-1)、CSS Syntax Module Level 3 与 OWASP 的输出转义 / XSS 防治指南;参考实现是 `Laffinty/wlwl`(基线提交 `5f8067f`)。
+本章的语义参照 WHATWG HTML / WHATWG URL、CSSOM(W3C REC cssom-1)、CSS Syntax Module Level 3 与 OWASP 的输出转义 / XSS 防治指南;参考实现是 `Laffinty/wlwl`(基线提交 `56b9fb6`)。
 
 | 签名 | 语义 | 失败 | 复杂度 | 层 |
 |---|---|---|---|---|
@@ -400,7 +400,7 @@ PRINT(HTML_SANITIZE_URL("https://example.com/a"));  // https://example.com/a
 
 **立身之本是「执行时间对输入线性」。** 实现走 Thompson 构造 + Pike VM,**没有回溯**。§16.3 的「必须拒绝」那一组不是功能取舍,是这条承诺的**前提**:一旦允许回溯引用或 lookahead,指数爆炸就成了可能,那这个成员等于没做。
 
-本章的语义参照 RE2 的语法文档(`doc/syntax.txt`)、Go `regexp/syntax` 的实现口径,以及 Perl / Python / JavaScript 的正则行为;参考实现是 `Laffinty/wlwl`(基线提交 `5f8067f`)。
+本章的语义参照 RE2 的语法文档(`doc/syntax.txt`)、Go `regexp/syntax` 的实现口径,以及 Perl / Python / JavaScript 的正则行为;参考实现是 `Laffinty/wlwl`(基线提交 `56b9fb6`)。
 
 ### 16.1 成员
 
