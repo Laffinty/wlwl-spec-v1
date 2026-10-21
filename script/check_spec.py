@@ -54,8 +54,9 @@ FULLWIDTH = {
 BOOK_ALIASES = {
     "总纲": "overview",
     "语言核心册": "language",
-    "对象册": "objects",
+    "语言册": "language",
     "对象与行为类型册": "objects",
+    "对象册": "objects",
     "并发册": "concurrency",
     "一致性册": "conformance",
     "标准库册": "stdlib",
@@ -66,6 +67,40 @@ BOOK_ALIASES = {
     "标准库·官方包册": "stdlib-official",
     "标准库·注册镜像册": "stdlib-registry",
     "路线图册": "roadmap",
+    "审计处置表": "audit",
+}
+
+# 表格行的**首个单元格**若恰好是下列某个册标签,该行内的裸 § 引用按该册解析。
+# 精确匹配(去粗体标记后全等),不做包含匹配 —— 包含匹配会把
+# 「并发原语」之类的普通首格误当成册标签。
+ROW_BOOKS = {
+    "总纲": "overview",
+    "语言核心": "language",
+    "语言核心册": "language",
+    "语言册": "language",
+    "对象与行为类型": "objects",
+    "对象与行为类型册": "objects",
+    "对象册": "objects",
+    "并发": "concurrency",
+    "并发册": "concurrency",
+    "一致性": "conformance",
+    "一致性册": "conformance",
+    "标准库": "stdlib",
+    "标准库·核心": "stdlib-core",
+    "标准库·核心册": "stdlib-core",
+    "标准库·文本": "stdlib-text",
+    "标准库·文本册": "stdlib-text",
+    "标准库·系统": "stdlib-system",
+    "标准库·系统册": "stdlib-system",
+    "标准库·安全": "stdlib-security",
+    "标准库·安全册": "stdlib-security",
+    "标准库·官方包": "stdlib-official",
+    "标准库·官方包册": "stdlib-official",
+    "标准库·注册镜像": "stdlib-registry",
+    "标准库·注册镜像册": "stdlib-registry",
+    "路线图": "roadmap",
+    "路线图册": "roadmap",
+    "审计": "audit",
     "审计处置表": "audit",
 }
 
@@ -108,7 +143,9 @@ def in_scope(key, num):
 
 
 QUAL_RE = re.compile(
-    r"(?P<qual>" + "|".join(sorted(BOOK_ALIASES, key=len, reverse=True)) + r")\s*§(?P<num>\d+(?:\.\d+)*)"
+    r"(?P<qual>"
+    + "|".join(sorted(BOOK_ALIASES, key=len, reverse=True))
+    + r")(?:\]\([^)]*\))?(?:\([^)]*\))?\s*§(?P<num>\d+(?:\.\d+)*)"
 )
 BARE_RE = re.compile(r"(?<![\w.])(?P<num>§\d+(?:\.\d+)*)")
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
@@ -206,8 +243,12 @@ def check_punctuation(files, errors):
                     )
 
 
-def resolve(qual, num, cur_key, per_book, union):
-    """返回 (状态, 解析到的册)。状态 ∈ {ok, not_yet, missing, needs_qual}。"""
+def resolve(qual, num, cur_key, per_book, union, ctx_key=None):
+    """返回 (状态, 解析到的册)。状态 ∈ {ok, not_yet, missing, needs_qual}。
+
+    `cur_key` 是**本册**(同册引用不需要册名);
+    `ctx_key` 是本行最近一个带册名的引用所确定的册,只用于消歧。
+    """
     if qual:
         key = BOOK_ALIASES.get(qual)
         if key is None:
@@ -225,10 +266,28 @@ def resolve(qual, num, cur_key, per_book, union):
             return "not_yet", None
         return "missing", None
 
+    # 同册优先:本册自己的章节,裸写即可。
     if num in per_book.get(cur_key, {}):
         return "ok", cur_key
+    # 标准库各册的 §1–§22 是**它们自己的**编号空间 —— 在标准库册里,
+    # §N 一律指本册的 §N,不去和语言册的 §N 混比。
+    if cur_key.startswith("stdlib"):
+        top = num.split(".")[0]
+        if top.isdigit() and 1 <= int(top) <= 22:
+            return "ok", cur_key
+    if ctx_key and ctx_key != cur_key:
+        if num in per_book.get(ctx_key, {}):
+            return "ok", ctx_key
+        if ctx_key == "stdlib":
+            for k in per_book:
+                if k.startswith("stdlib") and num in per_book[k]:
+                    return "ok", k
     for k in per_book:
         if num in per_book[k]:
+            hits = [k2 for k2 in per_book if num in per_book[k2]]
+            if len(hits) == 1:
+                # 该节号只存在于唯一一册 —— 裸写**不歧义**,读者能唯一确定。
+                return "ok", hits[0]
             return "needs_qual", k
     for k in per_book:
         if in_scope(k, num):
@@ -237,13 +296,20 @@ def resolve(qual, num, cur_key, per_book, union):
 
 
 def row_book_key(line):
-    """表格行的首个单元格若点名了某册,该行内的裸 § 引用按该册解析。"""
+    """表格行内若**恰好**出现某个册标签,该行内的裸 § 引用按该册解析。
+
+    册标签可以出现在该行的**任意**单元格 —— 规范矩阵的列序是
+    「主题 | 归属册 | 节号」,册名在第二格。
+    精确匹配(去粗体标记后全等),不做包含匹配 —— 包含匹配会把
+    「并发原语」之类的普通单元格误当成册标签。
+    """
     s = line.strip()
     if not s.startswith("|"):
         return None
-    first = s.split("|")[1] if len(s.split("|")) > 1 else ""
-    for alias, key in BOOK_ALIASES.items():
-        if alias in first:
+    for cell in s.split("|")[1:]:
+        label = cell.strip().strip("*").strip()
+        key = ROW_BOOKS.get(label)
+        if key:
             return key
     return None
 
@@ -256,27 +322,59 @@ def check_references(files, per_book, union, errors, warns):
         for i, line in enumerate(text.split("\n"), 1):
             row_key = row_book_key(line)
             line_key = row_key or cur_key
-            consumed = set()
-            for m in QUAL_RE.finditer(line):
-                consumed.update(range(m.start(), m.end()))
-                status, key = resolve(m.group("qual"), m.group("num"), line_key, per_book, union)
-                num = m.group("num")
-                if status == "missing":
-                    errors.append(f"{rel}:{i} 引用 {m.group('qual')} §{num} 指向不存在的章节")
-                elif status == "not_yet":
-                    warns.append(f"{rel}:{i} 引用 {m.group('qual')} §{num} 指向尚未成稿的章节")
-            for m in BARE_RE.finditer(line):
-                if any(s in consumed for s in range(m.start(), m.end())):
+            # 引号里的是**举例**,不是真引用 —— 整段挖空,不做扫描。
+            scan = _blank_quoted(QUOTE_RE.sub("\x00", line))
+            scan = _blank_quoted(DQUOTE_RE.sub("\x00", scan))
+            scan = _blank_quoted(re.sub(r'"[^"]*"', "\x00", scan))
+            scan = scan.replace("\x00", " ")
+
+            # 上下文必须**按位置**求值:行内有多个册名时,一个裸引用归到
+            # **它前面**最近的那个册名,而不是行内最后一个。
+            # 例:「总纲 §0.6、§0.7 → 一致性册全文 → 语言核心册 §1–§9」
+            # 里的 §0.7 属总纲,§11 属语言核心册。
+            events = []
+            for m in QUAL_RE.finditer(scan):
+                events.append((m.start(), 0, m))
+            for m in BARE_RE.finditer(scan):
+                if any(e[2].start() <= m.start() < e[2].end() for e in events):
                     continue
+                events.append((m.start(), 1, m))
+            events.sort(key=lambda e: e[0])
+
+            ctx_key = line_key
+            for _pos, kind, m in events:
+                if kind == 0:
+                    qk = BOOK_ALIASES.get(m.group("qual"))
+                    if qk == "stdlib":
+                        for k, secs in per_book.items():
+                            if k.startswith("stdlib") and m.group("num") in secs:
+                                qk = k
+                                break
+                    if qk:
+                        ctx_key = qk
+                    status, key = resolve(
+                        m.group("qual"), m.group("num"), line_key, per_book, union
+                    )
+                    num = m.group("num")
+                    if status == "missing":
+                        errors.append(
+                            f"{rel}:{i} 引用 {m.group('qual')} §{num} 指向不存在的章节"
+                        )
+                    elif status == "not_yet":
+                        warns.append(
+                            f"{rel}:{i} 引用 {m.group('qual')} §{num} 指向尚未成稿的章节"
+                        )
+                    continue
+
                 num = m.group("num")[1:]
-                tail = line[m.end():m.end() + 1]
-                head = line[max(0, m.start() - 1):m.start()]
-                status, key = resolve(None, num, line_key, per_book, union)
+                tail = scan[m.end():m.end() + 1]
+                head = scan[max(0, m.start() - 1):m.start()]
+                status, key = resolve(None, num, line_key, per_book, union, ctx_key)
                 if status == "missing":
                     errors.append(f"{rel}:{i} 引用 §{num} 指向不存在的章节")
                 elif status == "not_yet":
                     warns.append(f"{rel}:{i} 引用 §{num} 指向尚未成稿的章节")
-                elif status == "needs_qual" and row_key is None:
+                elif status == "needs_qual" and row_key is None and is_l_norm(p):
                     if tail in ("–", "-") or head in ("–", "-"):
                         continue
                     warns.append(
@@ -287,6 +385,12 @@ def check_references(files, per_book, union, errors, warns):
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
 BOLD_SPAN_RE = re.compile(r"\*\*[^*]+\*\*")
 QUOTE_RE = re.compile(r"「[^」]*」")
+DQUOTE_RE = re.compile(r"[“][^”]*[”]")
+
+
+def _blank_quoted(s):
+    """把 \x00 标记段替换成等长空格 —— 保留列号,便于定位。"""
+    return re.sub(r"\x00[^\x00]*\x00", lambda m: " " * len(m.group(0)), s)
 HEADING_RE = re.compile(r"^#{2,4}\s+(.*)$")
 # 诊断码的**定义形态**:表格行的首个单元格恰好是该码。
 DIAG_DEF_RE = re.compile(r"^\|\s*`([EW]\d{4})`\s*\|")
