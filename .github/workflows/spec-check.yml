@@ -1,0 +1,90 @@
+name: spec-check
+
+# WLWL v1.0 规范文本门禁。
+#
+# 三件事:
+#   1 check_spec.py —— 一致性册 §6.1 的七项文本检查(错误级 = 门禁失败)
+#   2 negctl.py     —— 检查器自身的阴性对照(证明第 1 项的绿灯不是假的)
+#   3 示例可运行性 —— 由 check_spec.py 的第 7 项承担,需要参考实现
+#
+# 参考实现从上游仓按**钉死的提交**构建,不是下载 release 产物 ——
+# 规范的「上游基线」写的就是那个提交,用它才能让规范与被验对象同版本。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spec-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 上游基线:与各册册首的「上游基线」行一致。改动它必须同时改各册。
+  WLWL_UPSTREAM_REF: f15051d
+
+jobs:
+  check:
+    name: 规范文本检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout 规范仓
+        uses: actions/checkout@v4
+
+      - name: Checkout 参考实现(钉死提交)
+        uses: actions/checkout@v4
+        with:
+          repository: Laffinty/wlwl
+          ref: ${{ env.WLWL_UPSTREAM_REF }}
+          path: upstream
+
+      - name: 核对上游提交与规范册首记录一致
+        run: |
+          set -euo pipefail
+          actual="$(git -C upstream rev-parse HEAD)"
+          short="$(git -C upstream rev-parse --short HEAD)"
+          echo "上游实际提交:${short}"
+          if [ "${short}" != "${WLWL_UPSTREAM_REF}" ]; then
+            echo "::error::上游提交 ${short} 与 WLWL_UPSTREAM_REF ${WLWL_UPSTREAM_REF} 不一致"
+            exit 1
+          fi
+          # 各册册首的「上游基线」行必须写同一个提交号。
+          if ! grep -rq "${short}" docs/spec/; then
+            echo "::error::没有册子在册首记录上游基线 ${short}"
+            exit 1
+          fi
+
+      - name: 安装 Rust 工具链
+        run: |
+          set -euo pipefail
+          # 工具链钉在 upstream/rust-toolchain.toml,不传 channel 让 rustup 自己读。
+          cd upstream
+          rustup toolchain install --profile default
+          rustc --version
+
+      - name: 缓存 cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            upstream/impl/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: spec-check-cargo-${{ env.WLWL_UPSTREAM_REF }}-${{ hashFiles('upstream/impl/Cargo.lock') }}
+          restore-keys: |
+            spec-check-cargo-${{ env.WLWL_UPSTREAM_REF }}-
+
+      - name: 构建参考实现
+        working-directory: upstream/impl
+        run: cargo build --locked --release --bin wlwl
+
+      - name: 文本检查
+        run: python script/check_spec.py --impl upstream/impl/target/release/wlwl
+
+      - name: 检查器阴性对照
+        run: python script/negctl.py --impl upstream/impl/target/release/wlwl
