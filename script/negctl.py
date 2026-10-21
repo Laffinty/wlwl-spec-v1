@@ -75,6 +75,13 @@ FAULTS = [
         "| `std.io` | `PRINT` `INPUT` `ZZZ_INJECTED` | R2 | 系统 |\n",
         "成员面对拍",
     ),
+    (
+        "不可见控制字符:注入一个换页符",
+        "docs/spec/wlwl-v1.0-objects.md",
+        "## 13 OOP 关键字与对象模型",
+        "## 13 OOP 关键字与对象模型\n\n注入\x0c一个换页符。\n",
+        "不可见控制字符",
+    ),
 ]
 
 

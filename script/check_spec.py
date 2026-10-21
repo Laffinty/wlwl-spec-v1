@@ -50,6 +50,10 @@ FULLWIDTH = {
     "\uff09": ")",
 }
 
+# 不可见控制字符(除 \t \n \r 外)。它们在 diff 与代码评审里**完全看不出来**,
+# 却会破坏文件比对、渲染与部分工具的解析 —— 必须当成错误。
+CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 # 册名 → 册文件关键字。用于「带册名的跨册引用」。
 BOOK_ALIASES = {
     "总纲": "overview",
@@ -236,6 +240,12 @@ def check_punctuation(files, errors):
         rel = os.path.relpath(p, REPO).replace("\\", "/")
         text, _ = strip_code_blocks(read(p))
         for i, line in enumerate(text.split("\n"), 1):
+            m = CONTROL_RE.search(line)
+            if m:
+                errors.append(
+                    f"{rel}:{i} 不可见控制字符 U+{ord(m.group(0)):04X} —— "
+                    f"它在 diff 里看不出来,却会破坏比对与解析: {line.strip()[:60]!r}"
+                )
             for ch, name in FULLWIDTH.items():
                 if ch in line:
                     errors.append(
