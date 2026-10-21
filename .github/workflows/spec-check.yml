@@ -24,8 +24,16 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # 上游基线:与各册册首的「上游基线」行一致。改动它必须同时改各册。
-  WLWL_UPSTREAM_REF: f15051d
+  # 上游基线:**完整 40 位 SHA**。
+  #
+  # ⚠⚠ 这里**不能写缩写**(`f15051d`)。`actions/checkout` 拿到缩写 SHA 时
+  # 认不出它是提交 —— 它会退化成「当分支 / 标签找」,于是 fetch 的是
+  # `+refs/heads/f15051d*` 与 `+refs/tags/f15051d*`,两者都不存在
+  # ⇒ `git fetch` exit 1 ⇒ job 直接红(2026-10-21 首次运行即如此)。
+  # 短形式只用于**人读**与下面的 grep 核对。
+  WLWL_UPSTREAM_REF: f15051d4231d5acd63d4542c7df7a24d0551162f
+  # 各册册首「上游基线」行记录的短形式(7 位)—— 核对与 grep 用它。
+  WLWL_UPSTREAM_SHORT: f15051d
 
 jobs:
   check:
@@ -48,15 +56,14 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git -C upstream rev-parse HEAD)"
-          short="$(git -C upstream rev-parse --short HEAD)"
-          echo "上游实际提交:${short}"
-          if [ "${short}" != "${WLWL_UPSTREAM_REF}" ]; then
-            echo "::error::上游提交 ${short} 与 WLWL_UPSTREAM_REF ${WLWL_UPSTREAM_REF} 不一致"
+          echo "上游实际提交:${actual}(短形式 ${WLWL_UPSTREAM_SHORT})"
+          if [ "${actual}" != "${WLWL_UPSTREAM_REF}" ]; then
+            echo "::error::上游提交 ${actual} 与 WLWL_UPSTREAM_REF ${WLWL_UPSTREAM_REF} 不一致"
             exit 1
           fi
-          # 各册册首的「上游基线」行必须写同一个提交号。
-          if ! grep -rq "${short}" docs/spec/; then
-            echo "::error::没有册子在册首记录上游基线 ${short}"
+          # 各册册首的「上游基线」行必须写同一个提交号(短形式)。
+          if ! grep -rq "${WLWL_UPSTREAM_SHORT}" docs/spec/; then
+            echo "::error::没有册子在册首记录上游基线 ${WLWL_UPSTREAM_SHORT}"
             exit 1
           fi
 
@@ -81,10 +88,21 @@ jobs:
 
       - name: 构建参考实现
         working-directory: upstream/impl
-        run: cargo build --locked --release --bin wlwl
+        run: |
+          set -euo pipefail
+          # ⚠ `impl/Cargo.lock` 在上游仓是**故意不入库**的(`.gitignore` 明写
+          # 「为它单独生成一份锁文件」)⇒ `--locked` 在锁文件缺失时直接失败:
+          #   error: cannot create the lock file ... because --locked was passed
+          # ⇒ 与上游仓 CI 的「Materialize Cargo.lock (if missing)」步骤对齐。
+          if [ ! -f Cargo.lock ]; then
+            echo "::group::generate Cargo.lock (first run)"
+            cargo generate-lockfile
+            echo "::endgroup::"
+          fi
+          cargo build --locked --release --bin wlwl
 
       - name: 文本检查
-        run: python script/check_spec.py --impl upstream/impl/target/release/wlwl
+        run: python3 script/check_spec.py --impl upstream/impl/target/release/wlwl
 
       - name: 检查器阴性对照
-        run: python script/negctl.py --impl upstream/impl/target/release/wlwl
+        run: python3 script/negctl.py --impl upstream/impl/target/release/wlwl
