@@ -288,6 +288,12 @@ CODE_SPAN_RE = re.compile(r"`[^`]*`")
 BOLD_SPAN_RE = re.compile(r"\*\*[^*]+\*\*")
 QUOTE_RE = re.compile(r"「[^」]*」")
 HEADING_RE = re.compile(r"^#{2,4}\s+(.*)$")
+# 诊断码的**定义形态**:表格行的首个单元格恰好是该码。
+DIAG_DEF_RE = re.compile(r"^\|\s*`([EW]\d{4})`\s*\|")
+# 成员名的形态:大写字母、数字、下划线。
+MEMBER_RE = re.compile(r"\b([A-Z][A-Z0-9_]{1,})\b")
+# 命名空间形态:小写点分。
+NS_RE = re.compile(r"^\|\s*`([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)?)`\s*\|")
 
 # 规范用语检查只管 L-规范册;README / 路线图 / 审计处置表是非规范的支撑文档。
 L_NORM_DIRS = ("docs/spec", "docs/stdlib")
@@ -359,6 +365,133 @@ def check_links(errors):
                 errors.append(f"{rel} 相对链接指向不存在的文件: {target}")
 
 
+def check_diag_uniqueness(files, errors, warns):
+    """诊断码的归属与唯一性。
+
+    诊断码表的归属是**语言核心册 §11.2 / §11.3**。因此:
+      · 同一个码在语言册里被定义两次 → 错误;
+      · 别的册在表格首格位置「定义」了一个码 → 错误(该码的归属不在那儿);
+      · 正文里**引用**一个码不算定义(只认表格首格)。
+    """
+    defined = {}
+    for p in files:
+        if not is_l_norm(p):
+            continue
+        rel = os.path.relpath(p, REPO).replace("\\", "/")
+        text, _ = strip_code_blocks(read(p))
+        for i, line in enumerate(text.split("\n"), 1):
+            m = DIAG_DEF_RE.match(line.strip())
+            if not m:
+                # 首个单元格可能并列多个码:`E0001` / `E0002` / `E0003`
+                cells = line.strip().split("|")
+                if len(cells) < 2:
+                    continue
+                first = cells[1]
+                if not first.strip().startswith("`"):
+                    continue
+                codes = re.findall(r"`([EW]\d{4})`", first)
+                if not codes:
+                    continue
+                m = None
+            else:
+                codes = [m.group(1)]
+            for code in codes:
+                if code in defined:
+                    errors.append(
+                        f"诊断码唯一性:`{code}` 在 {defined[code][0]}:{defined[code][1]} "
+                        f"与 {rel}:{i} 重复定义"
+                    )
+                else:
+                    defined[code] = (rel, i)
+    # 归属:除语言册外,任何册都不该在表格首格定义诊断码。
+    for code, (rel, i) in defined.items():
+        if "wlwl-v1.0-language.md" not in rel:
+            errors.append(
+                f"诊断码归属:`{code}` 在 {rel}:{i} 被定义 —— 诊断码表的归属是语言核心册 §11.2/§11.3"
+            )
+
+
+def _members_from_signature_cell(cell):
+    """从成员表的首格(签名)里取成员名。"""
+    names = set()
+    for tok in re.findall(r"`([^`]+)`", cell):
+        m = re.match(r"([A-Z][A-Z0-9_]*)\s*\(", tok)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def check_member_surface(files, errors, warns):
+    """成员面双向对拍:注册镜像册 ↔ 各标准库册的成员表。
+
+    两侧都存在该命名空间时,成员集合**必须**相等;
+    只有一侧存在时(另一册尚未成稿)只报提示。
+    """
+    registry = os.path.join(REPO, "docs", "stdlib", "wlwl-v1.0-stdlib-registry.md")
+    if not os.path.exists(registry):
+        warns.append("成员面对拍:注册镜像册尚不存在,已跳过")
+        return
+
+    reg = {}
+    text, _ = strip_code_blocks(read(registry))
+    for line in text.split("\n"):
+        m = NS_RE.match(line.strip())
+        if not m:
+            continue
+        cells = line.strip().split("|")
+        if len(cells) < 4:
+            continue
+        ns = m.group(1)
+        members = set(re.findall(r"`([A-Z][A-Z0-9_]*)`", cells[2]))
+        if ns in reg:
+            reg[ns] |= members
+        else:
+            reg[ns] = members
+
+    chapters = {}
+    for p in files:
+        rel = os.path.relpath(p, REPO).replace("\\", "/")
+        if not rel.startswith("docs/stdlib/"):
+            continue
+        if "registry" in rel:
+            continue
+        text, _ = strip_code_blocks(read(p))
+        cur_ns = None
+        for line in text.split("\n"):
+            h = re.match(r"^#{2,3}\s+.*`([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)?)`", line)
+            if h:
+                cur_ns = h.group(1)
+            if not cur_ns:
+                continue
+            s = line.strip()
+            if not s.startswith("|"):
+                continue
+            cells = s.split("|")
+            if len(cells) < 3:
+                continue
+            names = _members_from_signature_cell(cells[1])
+            if not names:
+                continue
+            chapters.setdefault(cur_ns, set()).update(names)
+
+    for ns in sorted(set(reg) | set(chapters)):
+        if ns not in reg:
+            warns.append(f"成员面对拍:命名空间 {ns} 尚未进入注册镜像册")
+            continue
+        if ns not in chapters:
+            warns.append(f"成员面对拍:命名空间 {ns} 的成员表尚未成稿")
+            continue
+        only_reg = sorted(reg[ns] - chapters[ns])
+        only_ch = sorted(chapters[ns] - reg[ns])
+        if only_reg or only_ch:
+            errors.append(
+                f"成员面对拍:{ns} 两侧不一致 —— "
+                f"仅注册镜像有:{only_reg or '无'};仅成员表有:{only_ch or '无'}"
+            )
+        else:
+            print(f"  成员面对拍:{ns} —— {len(reg[ns])} 个成员,两侧一致")
+
+
 def check_samples(files, impl, errors, warns):
     if not impl:
         warns.append("第 7 项(示例有效性)已跳过:未提供 --impl")
@@ -419,6 +552,8 @@ def main():
     check_references(files, per_book, union, errors, warns)
     check_bold_normatives(files, warns)
     check_impl_note_separation(files, warns)
+    check_diag_uniqueness(files, errors, warns)
+    check_member_surface(files, errors, warns)
     check_links(errors)
     n_samples = check_samples(files, args.impl, errors, warns)
 
