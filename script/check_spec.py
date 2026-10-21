@@ -149,7 +149,7 @@ def in_scope(key, num):
 QUAL_RE = re.compile(
     r"(?P<qual>"
     + "|".join(sorted(BOOK_ALIASES, key=len, reverse=True))
-    + r")(?:\]\([^)]*\))?(?:\([^)]*\))?\s*§(?P<num>\d+(?:\.\d+)*)"
+    + r")(?:\]\([^)]*\))?\s*\(?\s*§(?P<num>\d+(?:\.\d+)*)"
 )
 BARE_RE = re.compile(r"(?<![\w.])(?P<num>§\d+(?:\.\d+)*)")
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
@@ -276,15 +276,10 @@ def resolve(qual, num, cur_key, per_book, union, ctx_key=None):
             return "not_yet", None
         return "missing", None
 
-    # 同册优先:本册自己的章节,裸写即可。
+    # 1) 同册优先:本册自己的章节,裸写即可。
     if num in per_book.get(cur_key, {}):
         return "ok", cur_key
-    # 标准库各册的 §1–§22 是**它们自己的**编号空间 —— 在标准库册里,
-    # §N 一律指本册的 §N,不去和语言册的 §N 混比。
-    if cur_key.startswith("stdlib"):
-        top = num.split(".")[0]
-        if top.isdigit() and 1 <= int(top) <= 22:
-            return "ok", cur_key
+    # 2) 上下文册:行内最近一个带册名的引用所确定的册。
     if ctx_key and ctx_key != cur_key:
         if num in per_book.get(ctx_key, {}):
             return "ok", ctx_key
@@ -292,6 +287,17 @@ def resolve(qual, num, cur_key, per_book, union, ctx_key=None):
             for k in per_book:
                 if k.startswith("stdlib") and num in per_book[k]:
                     return "ok", k
+    # 3) 标准库各册的 §1–§22 是**它们自己的**编号空间 —— 在标准库册里,
+    #    §N 一律指本册的 §N,不去和语言册的 §N 混比。
+    if cur_key.startswith("stdlib"):
+        top = num.split(".")[0]
+        if top.isdigit() and 1 <= int(top) <= 22:
+            secs = per_book.get(cur_key, {})
+            if "." in num and top in secs:
+                # 本册有这个顶层章节,但没有这个小节 ⇒ 引用了不存在的子节。
+                return "missing", cur_key
+            return "ok", cur_key
+    # 4) 兜底:别册。
     for k in per_book:
         if num in per_book[k]:
             hits = [k2 for k2 in per_book if num in per_book[k2]]
@@ -306,21 +312,23 @@ def resolve(qual, num, cur_key, per_book, union, ctx_key=None):
 
 
 def row_book_key(line):
-    """表格行内若**恰好**出现某个册标签,该行内的裸 § 引用按该册解析。
+    """表格行内若出现某个册标签,该行内的裸 § 引用按该册解析。
 
     册标签可以出现在该行的**任意**单元格 —— 规范矩阵的列序是
-    「主题 | 归属册 | 节号」,册名在第二格。
-    精确匹配(去粗体标记后全等),不做包含匹配 —— 包含匹配会把
-    「并发原语」之类的普通单元格误当成册标签。
+    「主题 | 归属册 | 节号」,册名在第二格;待验证清单的列序是
+    「编号 | 命题 | 归属册」,册名在第三格且**带节号**(如「语言核心册 §18」)。
+
+    标签的识别:单元格**以**册标签开头,且其后是行尾或空格+§。
+    不做纯包含匹配 —— 那会把「并发原语」之类的普通单元格误当成册标签。
     """
     s = line.strip()
     if not s.startswith("|"):
         return None
-    for cell in s.split("|")[1:]:
+    for cell in split_cells(s)[1:]:
         label = cell.strip().strip("*").strip()
-        key = ROW_BOOKS.get(label)
-        if key:
-            return key
+        for name, key in ROW_BOOKS.items():
+            if label == name or label.startswith(name + " §") or label.startswith(name + " §"):
+                return key
     return None
 
 
