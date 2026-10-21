@@ -6,11 +6,14 @@
 
   1 标点契约       —— 正文不得出现全角 , : ; ( )
   2 跨册引用有效性 —— § 引用指向确实存在的章节
-  3 章节号唯一性   —— §1 起的编号在同一编号空间内不得重复定义
-  4 规范性用语     —— 必须 / 不得 / 应当 / 可以 作规范关键词时必须加粗
+  3 诊断码唯一性与归属 —— 码在语言核心册 §11.2 / §11.3 只定义一次;正文提到的每个码都有归属
+  4 规范性用语加粗 —— 必须 / 不得 / 应当 / 可以 作规范关键词时必须加粗
   5 实现注分离     —— 实现注段落必须独立成段
-  6 相对链接有效   —— 文档内的相对链接必须指向存在的文件
+  6 成员面双向对拍 —— 注册镜像册附录 A ↔ 各章成员表:成员集合相等 + `[stub]` 标记一致
   7 示例有效性     —— wlwl 代码块必须在参考实现上运行且退出码为 0
+
+另有两项实现层面的检查(章节号唯一性、相对链接有效)不在 §6.1 的七项里,
+但同样以错误级上报。
 
 **编号空间**:语言三册共用一个编号空间(§1–§19,§0.x 为各册自己的导言);
 标准库各册共用另一个编号空间(§1–§22)。两套空间彼此独立,靠册名消歧。
@@ -536,6 +539,73 @@ def check_links(errors):
                 errors.append(f"{rel} 相对链接指向不存在的文件: {target}")
 
 
+CODE_RE = re.compile(r"(?<![0-9A-Za-z_])([EW])(\d{4})(?![0-9A-Za-z_])")
+# 范围行的两端**各自带反引号**:`E0010`–`E0013`。不带反引号会漏掉整段范围。
+CODE_RANGE_RE = re.compile(
+    r"(?<![0-9A-Za-z_])`?([EW])(\d{4})`?\s*[-–—~]{1,2}\s*`?(?:[EW])?(\d{4})`?(?![0-9A-Za-z_])"
+)
+
+
+def _codes_in_text(text):
+    """抽出正文里提到的全部诊断码(含 `A0000`–`B0000` 区间的展开)。"""
+    out = set()
+    for m in CODE_RANGE_RE.finditer(text):
+        pre, lo, hi = m.group(1), int(m.group(2)), int(m.group(3))
+        if hi >= lo and hi - lo < 500:
+            for i in range(lo, hi + 1):
+                out.add(f"{pre}{i:04d}")
+    for m in CODE_RE.finditer(text):
+        out.add(m.group(0))
+    return out
+
+
+def check_diag_attribution(files, errors, warns):
+    """规范正文提到的每个诊断码,**必须**在语言核心册的码表里有归属。
+
+    方向一(规范 → 码表):码表里没有的码,说明规范**提了它却没定义它**。
+    这与「方向二(码表 → 规范)」互补 —— 后者由实现仓的守卫承担,跨仓。
+    """
+    core = os.path.join(REPO, "docs", "spec", "wlwl-v1.0-language.md")
+    if not os.path.exists(core):
+        return
+    core_text, _ = strip_code_blocks(read(core))
+    # 码表范围:§11.2 与 §11.3 两节。表里可能**并列**多个码
+    # (`| `E0001` / `E0002` / `E0003` |`),所以按「表格行里出现的全部码」收集,
+    # 而不是只认「首格恰好一个码」的行。
+    start = core_text.find("### 11.2 错误码")
+    end = core_text.find("### 11.4", start) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return
+    table = core_text[start:end]
+    defined = set()
+    for line in table.split("\n"):
+        s = line.strip()
+        if not s.startswith("|"):
+            continue
+        defined |= _codes_in_text(s)
+    # 规范**自己**声明「故意不存在」的码(§11.2 里明写)不算缺口。
+    # 逐码扫,不能用 finditer —— 一个码的匹配会把并列的另一个码**吞进自己的跨度**,
+    # 漏掉它(`E0055` 与 `E0057` 就是这样漏掉后者的)。
+    deliberately = set()
+    for m in re.finditer(r"`([EW]\d{4})`", table):
+        tail = table[m.end(): m.end() + 40]
+        if "不存在" in tail:
+            deliberately.add(m.group(1))
+
+    for p in files:
+        if not is_l_norm(p):
+            continue
+        rel = os.path.relpath(p, REPO).replace("\\", "/")
+        text, _ = strip_code_blocks(read(p))
+        for code in sorted(_codes_in_text(text)):
+            if code in defined or code in deliberately:
+                continue
+            errors.append(
+                f"{rel} 正文提到诊断码 {code},但语言核心册 §11.2 的码表与注册码清单里没有它 —— "
+                f"规范提了它却没定义它"
+            )
+
+
 def check_diag_uniqueness(files, errors, warns):
     """诊断码的归属与唯一性。
 
@@ -689,6 +759,76 @@ def check_member_surface(files, errors, warns):
             print(f"  成员面对拍:{ns} —— {len(reg[ns])} 个成员,两侧一致")
 
 
+# 注册镜像册的成员列:`` `NAME` `` 或 `` `NAME` `[stub]` `` —— 标记跟在名字后面。
+REG_MEMBER_RE = re.compile(r"`([A-Z][A-Z0-9_]*)`(\s+`\[stub\]`)?")
+
+
+def check_stub_markers(files, errors, warns):
+    """`[stub]` 标记在注册镜像册与各章成员表之间**必须**一致。
+
+    标记有两处落点(一致性册 §4.4 定的读法):各章成员表的签名格之后,
+    与注册镜像册附录 A 的成员列。手工同步两处必然漂 ⇒ 机械判定。
+    """
+    registry = os.path.join(REPO, "docs", "stdlib", "wlwl-v1.0-stdlib-registry.md")
+    if not os.path.exists(registry):
+        return
+
+    reg_stubs = set()
+    text, _ = strip_code_blocks(read(registry))
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s.startswith("|"):
+            continue
+        cells = split_cells(s)
+        if len(cells) < 4:
+            continue
+        ns = NS_RE.match(s)
+        if not ns:
+            continue
+        for m in REG_MEMBER_RE.finditer(cells[2]):
+            if m.group(2):
+                reg_stubs.add((ns.group(1), m.group(1)))
+
+    chapter_stubs = set()
+    for p in files:
+        rel = os.path.relpath(p, REPO).replace("\\", "/")
+        if not rel.startswith("docs/stdlib/") or "registry" in rel:
+            continue
+        text, _ = strip_code_blocks(read(p))
+        cur_ns = None
+        for line in text.split("\n"):
+            h = re.match(r"^#{2,3}\s+.*`([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)?)`", line)
+            if h:
+                cur_ns = h.group(1)
+            if not cur_ns:
+                continue
+            s = line.strip()
+            if not s.startswith("|"):
+                continue
+            cells = split_cells(s)
+            if len(cells) < 3:
+                continue
+            names = _members_from_signature_cell(cells[1])
+            if not names:
+                continue
+            if "[stub]" in cells[1]:
+                for n in names:
+                    chapter_stubs.add((cur_ns, n))
+
+    for ns, name in sorted(chapter_stubs - reg_stubs):
+        errors.append(
+            f"[stub] 标记不一致:{ns}::{name} 在章节成员表标了 [stub],"
+            f"注册镜像册附录 A 里没有 —— 两处必须同时标"
+        )
+    for ns, name in sorted(reg_stubs - chapter_stubs):
+        errors.append(
+            f"[stub] 标记不一致:{ns}::{name} 在注册镜像册附录 A 标了 [stub],"
+            f"章节成员表里没有 —— 两处必须同时标"
+        )
+    if chapter_stubs or reg_stubs:
+        print(f"  [stub] 标记对拍 —— {len(chapter_stubs)} 个桩成员,两侧一致")
+
+
 def check_samples(files, impl, errors, warns):
     if not impl:
         warns.append("第 7 项(示例有效性)已跳过:未提供 --impl")
@@ -717,7 +857,7 @@ def check_samples(files, impl, errors, warns):
                 )
                 if r.returncode != 0:
                     msg = (
-                        f"{rel} 第 {idx} 个 wlwl 代码块运行失败(rc={r.returncode}): "
+                        f"{rel} 第 {total} 个 wlwl 代码块运行失败(rc={r.returncode}): "
                         f"{(r.stderr or r.stdout).strip()[:120]}"
                     )
                     errors.append(msg)
@@ -756,7 +896,9 @@ def main():
     check_bold_normatives(files, warns)
     check_impl_note_separation(files, warns)
     check_diag_uniqueness(files, errors, warns)
+    check_diag_attribution(files, errors, warns)
     check_member_surface(files, errors, warns)
+    check_stub_markers(files, errors, warns)
     check_links(errors)
     n_samples = check_samples(files, args.impl, errors, warns)
 

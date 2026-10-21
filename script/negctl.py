@@ -68,6 +68,20 @@ FAULTS = [
         "诊断码归属",
     ),
     (
+        "诊断码归属(方向一):塌缩语言核心册码表里的范围,让正文提到的码失去定义",
+        "docs/spec/wlwl-v1.0-language.md",
+        "| `E0010`–`E0013` | 语法错误 |",
+        "| `E0010` | 语法错误 |",
+        "规范提了它却没定义它",
+    ),
+    (
+        "[stub] 标记对拍:抽掉注册镜像册里的 [stub] 标记",
+        "docs/stdlib/wlwl-v1.0-stdlib-registry.md",
+        "`TOOL` `CALL_TOOL` `[stub]`",
+        "`TOOL` `CALL_TOOL`",
+        "[stub] 标记不一致",
+    ),
+    (
         "成员面对拍:往注册镜像册注入一个不存在的成员",
         "docs/stdlib/wlwl-v1.0-stdlib-registry.md",
         "## 附录 A 成员注册镜像",
