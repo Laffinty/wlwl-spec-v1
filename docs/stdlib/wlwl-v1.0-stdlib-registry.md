@@ -99,6 +99,8 @@
 
 附录 A 与各标准库册的成员表**必须**集合相等(§0.7 规则 3);一致性册 §6.1 第 6 项把它列为发布前的机械检查项。
 
+成员名后的 `[stub]` 标记表示该成员的**返回值形状**不在公共面内(一致性册 §4.4):实现侧**可以**把桩回包替换为真实实现,替换**不**构成破坏性变更。标记**不**改变「成员集合相等」这条规则 —— 它是集合内某个成员的附加属性。
+
 | 命名空间 | 成员 | 层 | v1.0 册 |
 |---|---|---|---|
 | `std.io` | `PRINT` `INPUT` `PRINT_ERR` | R2 | 系统 |
@@ -118,7 +120,7 @@
 | `std.math` | `ABS` `MIN` `MAX` `FLOOR` `CEIL` `ROUND` `SQRT` `POW` `CLAMP` `PI` `E` `LN` `LOG2` `LOG10` `EXP` `TRUNC` `SIN` `COS` `TAN` `ASIN` `ACOS` `ATAN` `ATAN2` `SINH` `COSH` `TANH` `SIGN` `DIV_CEIL` `GCD` `LCM` `IS_SQRT` `POW_MOD` `DECIMAL` `DECIMAL_ADD` `DECIMAL_SUB` `DECIMAL_MUL` `DECIMAL_DIV` `DECIMAL_CMP` `DECIMAL_TO_STRING` `DECIMAL_ROUND` `FRACTION` `FRACTION_ADD` `FRACTION_SUB` `FRACTION_MUL` `FRACTION_DIV` `FRACTION_CMP` `FRACTION_TO_STRING` `FRACTION_TO_DECIMAL` `APPROX_EQ` `IS_NAN` `IS_INF` `SIGNIFICANT_DIGITS` `MEDIAN` `MODE` `VARIANCE_S` `VARIANCE_P` `STDDEV_S` `STDDEV_P` `PERCENTILE` `CORRELATION` `LINEAR_FIT` | 混合 | 核心 |
 | `std.test` | `TEST` `ASSERT` `ASSERT_EQ` `ASSERT_NEQ` `EXPECT_ERR` `RUN_TESTS` | 混合 | 核心 |
 | `ai` | `ASK` `EMBED` `COMPLETE` `ASK_STREAM` `ASK_ALL` | R2 | 官方包 |
-| `agent` | `TASK` `TOOL` `CALL_TOOL` `MODEL` `CONTEXT` | R2 | 官方包 |
+| `agent` | `TASK` `TOOL` `CALL_TOOL` `[stub]` `MODEL` `CONTEXT` | R2 | 官方包 |
 | `std.compress` | `ZSTD_COMPRESS` `ZSTD_DECOMPRESS` `ZLIB_COMPRESS` `ZLIB_DECOMPRESS` `GZIP_COMPRESS` `GZIP_DECOMPRESS` `DEFLATE_RAW_COMPRESS` `DEFLATE_RAW_DECOMPRESS` | R2 | 系统 |
 | `std.net` | `URL_PARSE` `URL_JOIN` `HTTP_GET` `HTTP_POST` `HTTP_REQUEST` | R2 | 系统 |
 | `std.result` | `RESULT_MAP` `AND_THEN` `FLATTEN` `NULL_OR` `RESULT_ALL` `RESULT_ANY` | 混合(R1 `RESULT_MAP`/`AND_THEN`/`FLATTEN`/`NULL_OR` + R2 `RESULT_ALL`/`RESULT_ANY`) | 核心 |
