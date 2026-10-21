@@ -525,6 +525,31 @@ def check_diag_uniqueness(files, errors, warns):
             )
 
 
+def split_cells(row):
+    """GFM 感知的表格行切分 —— **尊重 `\\|` 转义**。
+
+    朴素的 split("|") 会把签名格里的转义竖线(例如
+    `ENV_GET(...) -> STRING \\| NULL`)切成两半,导致该成员抽不出来,
+    成员面对拍会误报「仅注册镜像有」。这是实测踩到的。
+    """
+    cells, cur, i = [], [], 0
+    while i < len(row):
+        c = row[i]
+        if c == "\\" and i + 1 < len(row) and row[i + 1] == "|":
+            cur.append("|")
+            i += 2
+            continue
+        if c == "|":
+            cells.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    cells.append("".join(cur))
+    return cells
+
+
 def _members_from_signature_cell(cell):
     """从成员表的首格(签名)里取成员名。"""
     names = set()
@@ -549,10 +574,11 @@ def check_member_surface(files, errors, warns):
     reg = {}
     text, _ = strip_code_blocks(read(registry))
     for line in text.split("\n"):
-        m = NS_RE.match(line.strip())
+        s = line.strip()
+        m = NS_RE.match(s)
         if not m:
             continue
-        cells = line.strip().split("|")
+        cells = split_cells(s)
         if len(cells) < 4:
             continue
         ns = m.group(1)
@@ -580,7 +606,7 @@ def check_member_surface(files, errors, warns):
             s = line.strip()
             if not s.startswith("|"):
                 continue
-            cells = s.split("|")
+            cells = split_cells(s)
             if len(cells) < 3:
                 continue
             names = _members_from_signature_cell(cells[1])
