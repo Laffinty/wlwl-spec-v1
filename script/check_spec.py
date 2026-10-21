@@ -235,6 +235,18 @@ def collect_sections(files):
     return per_book, union
 
 
+def gh_error(path, line, message):
+    """在 GitHub Actions 里把一条错误发成 **annotation**。
+
+    为什么要这一步:CI 日志要鉴权才能读(403),而 annotation 走 check-runs API
+    就能拿到 —— 规范文本的门禁失败必须**在 UI 上直接可见**,而不只是躺在日志里。
+    """
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    safe = message.replace("%", "%25").replace("\r", " ").replace("\n", " ")
+    print(f"::error file={path},line={line}::{safe}")
+
+
 def check_punctuation(files, errors):
     for p in files:
         rel = os.path.relpath(p, REPO).replace("\\", "/")
@@ -667,14 +679,20 @@ def check_samples(files, impl, errors, warns):
                     timeout=60,
                 )
                 if r.returncode != 0:
-                    errors.append(
+                    msg = (
                         f"{rel} 第 {idx} 个 wlwl 代码块运行失败(rc={r.returncode}): "
                         f"{(r.stderr or r.stdout).strip()[:120]}"
                     )
+                    errors.append(msg)
+                    gh_error(rel, idx, msg)
             except subprocess.TimeoutExpired:
-                errors.append(f"{rel} 第 {idx} 个 wlwl 代码块运行超时")
+                msg = f"{rel} 第 {idx} 个 wlwl 代码块运行超时"
+                errors.append(msg)
+                gh_error(rel, idx, msg)
             except Exception as e:  # noqa: BLE001
-                errors.append(f"{rel} 第 {idx} 个 wlwl 代码块无法运行: {e}")
+                msg = f"{rel} 第 {idx} 个 wlwl 代码块无法运行: {e}"
+                errors.append(msg)
+                gh_error(rel, idx, msg)
             finally:
                 try:
                     os.unlink(tmp)
