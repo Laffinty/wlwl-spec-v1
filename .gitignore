@@ -1,3 +1,11 @@
 .scratch/
 __pycache__/
 *.pyc
+
+# 写作 agent 的临时产物:不得进入版本管理。
+# ⚠ 集成者用 `git add -A` 时曾把 agent 抓的检查器输出误纳入版本管理
+#   (54 KB 的检查器输出进了 commit c586dc9)——并行 agent 在跑时,
+#   提交**必须**用显式路径,不要用 `-A`。
+base_out.txt
+_t*.wll
+*.out
