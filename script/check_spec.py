@@ -43,7 +43,11 @@ except Exception:
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 NORMATIVE_DIRS = ["docs/spec", "docs/stdlib"]
-SKIP_FILES = ["docs/audit/第三方审计报告-从爱好者到工业化.md"]
+# 外部审计原文的归档件:逐字保留审计方的原始写法(全角中文标点等),
+# **不受**本仓的标点契约约束 —— 否则归档动作本身就会把原文改写掉。
+# 判据:docs/audit/ 下以「第三方审计报告」开头的文件。
+AUDIT_ARCHIVE_PREFIX = "第三方审计报告"
+SKIP_FILES = []  # 额外的逐文件豁免(默认空)
 
 FULLWIDTH = {
     "\uff0c": ",",
@@ -241,6 +245,11 @@ def all_md_files():
                 p = os.path.join(root, n)
                 rel = os.path.relpath(p, REPO).replace("\\", "/")
                 if rel in SKIP_FILES:
+                    continue
+                if (
+                    rel.startswith("docs/audit/")
+                    and os.path.basename(rel).startswith(AUDIT_ARCHIVE_PREFIX)
+                ):
                     continue
                 out.append(p)
     return out
