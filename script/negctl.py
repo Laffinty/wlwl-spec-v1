@@ -206,10 +206,15 @@ def copy_impl_tree(impl_root, dest):
     if not os.path.isdir(src):
         return False
     os.makedirs(dest, exist_ok=True)
+    # ⚠ `dirs_exist_ok=True`:**CI 里 `upstream/` 就在工作区根** ⇒ 复制规范仓到
+    # 临时工作区时,`upstream/` 那一整棵(实现仓)会**跟着被复制进去** ⇒ 目标
+    # `upstream/impl/crates` **已经存在** ⇒ 不带这个参数就是 FileExistsError
+    # (2026-10-22 在 CI 上踩过:negctl 直接崩,门禁红)。
     shutil.copytree(
         src,
         os.path.join(dest, "crates"),
         ignore=shutil.ignore_patterns("target", ".git", "__pycache__"),
+        dirs_exist_ok=True,
     )
     os.makedirs(os.path.join(dest, ".git"), exist_ok=True)
     return True
@@ -226,7 +231,10 @@ def main():
     else:
         print(f"参考实现:{impl}")
 
-    impl_root = check_spec.find_impl_root()
+    # ⚠ 必须把**原始规范仓**的位置传进去:本模块是在**临时副本**里跑的
+    # (`import check_spec` 拿到的 REPO 是副本)⇒ 用副本的位置找实现仓必然找不到
+    # ⇒ 第 8 项整项跳过 ⇒ 它那两条阴性对照会「漏网」。2026-10-22 在 CI 上踩过。
+    impl_root = check_spec.find_impl_root(base=REPO)
     if not impl_root:
         print(
             "未找到参考实现的源码目录;"
@@ -237,10 +245,13 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix="wlwl-negctl-")
     work = os.path.join(tmp, "repo")
+    # ⚠ **排除 `upstream/`**:CI 里它就是实现仓(几百 MB)⇒ 复制进临时工作区既慢
+    # 又会让 `upstream/impl/crates` 预先存在(见 `copy_impl_tree` 的说明)。
+    # 实现仓的源码由 `copy_impl_tree` 单独复制进来。
     shutil.copytree(
         REPO,
         work,
-        ignore=shutil.ignore_patterns(".git", ".scratch", "__pycache__"),
+        ignore=shutil.ignore_patterns("upstream", ".git", ".scratch", "__pycache__"),
     )
     try:
         env = dict(os.environ)

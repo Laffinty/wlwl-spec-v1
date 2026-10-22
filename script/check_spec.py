@@ -1051,19 +1051,25 @@ def _impl_root_norm(p):
     return p
 
 
-def find_impl_root():
+def find_impl_root(base=None):
     """找参考实现的**源码**目录(不是可执行文件)。
 
     CI 把实现仓 checkout 到 `upstream/`(见 .github/workflows/spec-check.yml),
     所以 impl 目录在 `upstream/impl`;本地并列放在 `../wlwl/impl`。
     都找不到 ⇒ 返回 None(第 8 项报「已跳过」,**不得**当成通过)。
+
+    ⚠ `base` 是**查找的起点目录**,默认本仓所在位置。`negctl.py` 在**临时副本**里
+    运行本模块 ⇒ 那时「本仓」是副本 ⇒ 副本的旁边没有实现仓 ⇒ 必须由调用方把
+    **原始**规范仓的位置传进来(否则第 8 项的阴性对照会因「找不到实现仓」而
+    全部跳过 —— 2026-10-22 在 CI 上踩过:11/11 里有 1 项因此「漏网」)。
     """
+    root0 = os.path.abspath(base) if base else REPO
     cands = []
     env = os.environ.get(IMPL_ENV_VAR, "").strip()
     if env:
         cands.append(env)
-    cands.append(os.path.join(REPO, "upstream", "impl"))
-    cands.append(os.path.join(REPO, "..", "wlwl", "impl"))
+    cands.append(os.path.join(root0, "upstream", "impl"))
+    cands.append(os.path.join(root0, "..", "wlwl", "impl"))
     for c in cands:
         root = _impl_root_norm(c)
         if os.path.isdir(os.path.join(root, "crates")):
