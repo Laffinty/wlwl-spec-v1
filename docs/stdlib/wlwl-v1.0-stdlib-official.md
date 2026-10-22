@@ -152,6 +152,8 @@
 | 上下文构造失败 | `E0083` |
 | 模型名缺少 `provider/` 前缀 | `W0052`(警告) |
 
+**实现注(非规范)**:参考实现目前把 `E0081` 用作**认证失败**(HTTP 401 / 403)、把 `E0083` 用作**响应解析失败**(成功体的 JSON 解析不了 / 缺 `choices[0].message.content`),与本节的语义(`E0081` 协议错误 / `E0083` 上下文错误)**错位一格**;另:401 / 403 既是「HTTP 4xx」(网络梯 `E0093`)又是「推理请求失败」(`E0080`)⇒ 本节**没有**消歧。两条都已登记在一致性册 §5.4(**X-10** 规范文本缺口 / **X-11** 实现待收敛),等裁决后一并收敛。
+
 ### 9.3 值形状与边界
 
 **`opts` 的形状**:`opts` **必须**是 `DICT` 或 `NULL`,`NULL` 与缺省等价。`DICT` 的键集由实现解释,规范**不**约束其集合。
@@ -212,11 +214,11 @@ PRINT(ASK_ALL(["a", "b"]));                     // [[mock-batch:0] echo (h=0xe40
 
 | 签名 | 语义 | 失败 | 复杂度 | 层 |
 |---|---|---|---|---|
-| `TASK(name, prompt, opts?) -> STRING` | 构造代理任务并返回一段描述文本;`name` 命中内置任务名时用对应的系统提示,否则用通用提示并给 `W0052` | 元数错 → `E0022`;类型错 → `E0030`;`E0090`–`E0094` | — | R2 |
-| `TOOL(name, description, params_schema?, returns_schema?) -> DICT` | 描述一个工具,返回工具描述字典(`name` / `description` / `params_schema` / `returns_schema` / `v`);两个 schema 形参**必须**是 `DICT` 或 `NULL` | 元数错 → `E0022`;类型错 → `E0030`;`E0081` | — | R2 |
-| `CALL_TOOL(tool, params) -> DICT` `[stub]` | 同步调用已注册工具;`tool` **必须**是 `TOOL` 的返回值,`params` **必须**是 `DICT` 或 `NULL` | 元数错 → `E0022`;类型错 → `E0030`;`E0082` | — | R2 |
-| `MODEL(name) -> DICT` | 选择模型,返回模型描述字典(`name` / `provider` / `model` / `capabilities` / `v`) | 元数错 → `E0022`;类型错 → `E0030`;`E0080` | — | R2 |
-| `CONTEXT(key, value?) -> v` | 上下文存取:给 `value` 则**写入并返回 `NULL`**;不给则**读取**,不存在时返回 `NULL` | 元数错 → `E0022`;类型错 → `E0030`;`E0083` | — | R2 |
+| `TASK(name, prompt, opts?) -> STRING` | 构造代理任务并返回一段描述文本;`name` 命中内置任务名时用对应的系统提示,否则用通用提示并给 `W0052` | 元数错 → `E0022`;类型错 → `E0030`;推理侧失败 → `E0080`–`E0083`;传输侧失败 → `E0090`–`E0094` | — | R2 |
+| `TOOL(name, description, params_schema?, returns_schema?) -> DICT` | 描述一个工具,返回工具描述字典(`name` / `description` / `params_schema` / `returns_schema` / `v`);两个 schema 形参**必须**是 `DICT` 或 `NULL` | 元数错 → `E0022`;类型错 → `E0030` | — | R2 |
+| `CALL_TOOL(tool, params) -> DICT` `[stub]` | 同步调用已注册工具;`tool` **必须**是 `TOOL` 的返回值,`params` **必须**是 `DICT` 或 `NULL` | 元数错 → `E0022`;类型错 → `E0030` | — | R2 |
+| `MODEL(name) -> DICT` | 选择模型,返回模型描述字典(`name` / `provider` / `model` / `capabilities` / `v`) | 元数错 → `E0022`;类型错 → `E0030` | — | R2 |
+| `CONTEXT(key, value?) -> v` | 上下文存取:给 `value` 则**写入并返回 `NULL`**;不给则**读取**,不存在时返回 `NULL` | 元数错 → `E0022`;类型错 → `E0030` | — | R2 |
 
 本包五个成员的复杂度列一律是 `—`:**单次调用的代价由外部推理服务与网络决定,规范不约束上界**。本语言侧的开销只有参数校验与结果构造,不构成可观察的复杂度承诺。
 
