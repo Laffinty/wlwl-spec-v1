@@ -1307,8 +1307,142 @@ def _resolve_member(test_name, candidates, member_index):
     return matches[0]
 
 
+def _rust_braced_span(text, start):
+    """从 text[start] 起的第一个「函数体的 `{`」开始,取**配平**的 `}`。
+
+    返回 (body_start, body_end) —— body_start 指向 `{` 之后,body_end 指向
+    配平的 `}` 本身(闭区间);找不到返回 None。
+
+    ⚠ **为什么要自己扫**:函数体里可以有嵌套块(`impl` / `struct` / `trait` /
+    闭包 / `match`),而「截到第一个整行只有 `}`」那条老口径会在**嵌套块的
+    结尾**截断 ⇒ 断言写在嵌套块之后时**看不见** ⇒ 它的 pin **不计数**
+    ⇒ 缺口清单会**漏报**。⇒ 口径改成**括号配平**。
+
+    ⚠ 扫描时必须跳过:行注释、块注释、字符串字面量、原始字符串、字符字面量
+    —— 它们里面可能有 `{` / `}`(例如 `"{"` 或 `'}'`)。
+    """
+    i = start
+    n = len(text)
+    # 第一步:找到函数体的 `{`(跳过签名里的内容)。
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            depth = 1
+            i += 2
+            while i < n and depth:
+                if text.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif text.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            continue
+        if c == "r" and i + 1 < n and text[i + 1] in '"#':
+            j = i + 1
+            hashes = 0
+            while j < n and text[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and text[j] == '"':
+                j += 1
+                end = '"' + "#" * hashes
+                k = text.find(end, j)
+                i = n if k < 0 else k + len(end)
+                continue
+        if c == '"':
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "{":
+            break
+        i += 1
+    if i >= n:
+        return None
+    # 第二步:从 `{` 起做配平。
+    depth = 0
+    j = i
+    while j < n:
+        c = text[j]
+        if c == "/" and j + 1 < n and text[j + 1] == "/":
+            k = text.find("\n", j)
+            j = n if k < 0 else k + 1
+            continue
+        if c == "/" and j + 1 < n and text[j + 1] == "*":
+            d = 1
+            j += 2
+            while j < n and d:
+                if text.startswith("/*", j):
+                    d += 1
+                    j += 2
+                elif text.startswith("*/", j):
+                    d -= 1
+                    j += 2
+                else:
+                    j += 1
+            continue
+        if c == "r" and j + 1 < n and text[j + 1] in '"#':
+            k = j + 1
+            hashes = 0
+            while k < n and text[k] == "#":
+                hashes += 1
+                k += 1
+            if k < n and text[k] == '"':
+                k += 1
+                end = '"' + "#" * hashes
+                m = text.find(end, k)
+                j = n if m < 0 else m + len(end)
+                continue
+        if c == '"':
+            j += 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            continue
+        if c == "'":
+            # 字符字面量 vs 生命周期标注:`'a'` 是字面量,`'static` 是标注。
+            if j + 2 < n and text[j + 2] == "'":
+                j += 3
+                continue
+            if j + 3 < n and text[j + 1] == "\\" and text[j + 3] == "'":
+                j += 4
+                continue
+            j += 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return (i + 1, j)
+        j += 1
+    return None
+
+
 def _iter_test_fns(body):
-    """产出 (测试函数名, 函数体文本)。只认带 `#[test]` 的函数。"""
+    """产出 (测试函数名, 函数体文本)。只认带 `#[test]` 的函数。
+
+    ⚠ 函数体按**括号配平**取(见 `_rust_braced_span`)—— 老口径「截到第一个
+    整行只有 `}`」会在**嵌套块的结尾**截断 ⇒ 断言写在嵌套块之后时看不见
+    ⇒ pin 不计数 ⇒ 缺口清单**漏报**。⇒ 口径改成配平(2026-10-22)。
+    """
     lines = body.split("\n")
     n = len(lines)
     i = 0
@@ -1327,12 +1461,24 @@ def _iter_test_fns(body):
         if name is None:
             i += 1
             continue
-        # 函数体:到第一个「整行只有 }」为止(rustfmt 的标准形状)。
-        k = j
-        while k < n and lines[k].strip() != "}":
-            k += 1
-        yield name, "\n".join(lines[j:min(k + 1, n)])
-        i = k + 1
+        # 函数体:从签名行末尾起做**括号配平**。
+        # ⚠ 用**行偏移**换算成字符偏移(签名可能跨行)。
+        offset = sum(len(x) + 1 for x in lines[:j])
+        span = _rust_braced_span(body, offset)
+        if span is None:
+            # 配平失败(文件被截断 / 语法异常)⇒ 退回老口径,至少不丢整行。
+            k = j
+            while k < n and lines[k].strip() != "}":
+                k += 1
+            yield name, "\n".join(lines[j:min(k + 1, n)])
+            i = k + 1
+            continue
+        start, end = span
+        yield name, body[start:end]
+        # 跳到函数体之后,避免把函数体里的 `#[test]`(嵌套定义)重复认领。
+        # ⚠ 行号换算:用 `end` 处**所在行**(不是「从文件开头数起的换行数」——
+        #   那是绝对偏移,加到行号上会跳飞)。
+        i = body.count("\n", 0, end) + 1
 
 
 def _balanced(text, start, open_ch, close_ch):

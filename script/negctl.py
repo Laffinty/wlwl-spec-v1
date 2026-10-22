@@ -220,6 +220,37 @@ def copy_impl_tree(impl_root, dest):
     return True
 
 
+# ⚠ 第 0 项:**提取口径自检** —— 检查器认行内单测时,函数体必须按**括号配平**取
+# (不是「截到第一个整行只有 `}`」)⇒ 断言写在**嵌套块之后**时也必须看得见。
+# 老口径会在嵌套块的结尾截断 ⇒ 那个 pin **不计数** ⇒ 缺口清单**漏报**。
+#
+# ⚠ 这条自检的形状就是 V-05 那一笔里 `io.rs` 踩过的坑(断言前面有
+# `impl Read for …` ⇒ 老口径看不见 ⇒ 被误判成「钉不住」)。
+EXTRACTOR_SNIPPET = '''#[test]
+fn sample_case() {
+    struct Helper;
+    impl Helper {
+        fn noop(&self) {}
+    }
+    let x = 1;
+    assert_eq!(x, 1, "the assert after a nested block must be visible");
+}
+'''
+
+
+def selfcheck_extractor():
+    """返回 (是否通过, 说明)。"""
+    seen = [body for _name, body in check_spec._iter_test_fns(EXTRACTOR_SNIPPET)]
+    if not seen:
+        return False, "检查器没有产出任何行内单测"
+    if not any("assert_eq!" in b for b in seen):
+        return (
+            False,
+            "嵌套块之后的断言没被抽出来 ⇒ 提取口径回退成了「截到整行 }」",
+        )
+    return True, "嵌套块之后的断言可见"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--impl", help="参考实现的 wlwl 可执行文件路径")
@@ -283,6 +314,15 @@ def main():
         failures = []
         hit_count = 0
         skip_count = 0
+
+        # 第 0 项:提取口径自检(不是注入 ⇒ 不动工作区)。
+        ok, why = selfcheck_extractor()
+        print(f"  [{'命中' if ok else '漏网'}] 提取口径自检: {why}")
+        if ok:
+            hit_count += 1
+        else:
+            failures.append(f"提取口径自检失败:{why}")
+
         for desc, root, rel, anchor, injected, expect, mode in FAULTS:
             if mode == "count_drop" and not have_impl:
                 print(f"  [跳过] {desc}(没有实现仓副本)")
@@ -342,7 +382,7 @@ def main():
         print(
             f"\n阴性对照通过:命中 {hit_count} 项"
             + (f",跳过 {skip_count} 项" if skip_count else "")
-            + f"(共 {len(FAULTS)} 项注入)。"
+            + f"(共 {len(FAULTS)} 项注入 + 1 项提取口径自检)。"
         )
         return 0
     finally:
