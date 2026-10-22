@@ -105,7 +105,7 @@
 
 本册**唯一**的跨册差异登记是:`ERR` 的产生与消费规则。语言核心册 §8.6 规定"未消费的 `ERR` **不得**被丢弃",本册各章的「失败」列**只**描述成员自身在失败时**返回什么**,**不**复述 §8.6 —— `ERR` 值的丢弃与报告一律由 §8.6 承担。
 
-> 上游基线:Laffinty/wlwl 提交 56b9fb6(2026-10-22,含 v1.0 语义第一批:`D-01`/`E0103`、`X-05` 与 `X-09` 收敛)。
+> 上游基线:Laffinty/wlwl 提交 1a76635(2026-10-22,含 v1.0 语义第一批:`D-01`/`E0103`、`X-05`/`X-09` 收敛与 `X-04` 的字典哈希索引)。
 
 ## 9 `ai` —— AI 推理(官方包)
 
@@ -186,7 +186,7 @@ PRINT(ASK_ALL(["a", "b"]));                     // [[mock-batch:0] echo (h=0xe40
 2. **`ASK_STREAM` 的 `callback` 是占位形参**:当前**必须**是 `NULL`,传函数值产生 `E0030`。真流式(逐块回调)尚未落地,本形态**不**承诺块边界。
 3. **本包的可见面只有一条路径**:`ai:ask`。旧路径 `wlwl:std.ai` 不再解析,本册不提供兼容层。
 
-**实现注(非规范)**:参考实现(`Laffinty/wlwl` 基线 `56b9fb6`)的 mock 后端把 `opts` 解析为 `system`(STRING)、`max_tokens`(INTEGER)、`temperature`(FLOAT)三个键,其余键被忽略;`EMBED` 的缺省模型未设置环境变量时取 `"default"`,`COMPLETE` 的缺省语言取 `"wlwl"`。
+**实现注(非规范)**:参考实现(`Laffinty/wlwl` 基线 `1a76635`)的 mock 后端把 `opts` 解析为 `system`(STRING)、`max_tokens`(INTEGER)、`temperature`(FLOAT)三个键,其余键被忽略;`EMBED` 的缺省模型未设置环境变量时取 `"default"`,`COMPLETE` 的缺省语言取 `"wlwl"`。
 
 **实现注(非规范)**:参考实现在真实后端下把 HTTP 状态码映射为诊断码:401 / 403 → `E0081`,404 → `E0083`,其余 4xx → `E0093`,5xx → `E0094`;连接失败 → `E0090`,DNS 失败 → `E0091`,TLS 失败 → `E0092`;端点或凭据缺失 → `E0082`。
 
@@ -312,7 +312,7 @@ PRINT(ASK_ALL(["a", "b"]));                     // [[mock-batch:0] echo (h=0xe40
 
 **`TASK` 的返回值**:`STRING`,一段描述文本。命中内置任务名时用对应的系统提示,未命中时用通用提示并给 `W0052`。
 
-**实现注(非规范)**:参考实现(`Laffinty/wlwl` 基线 `56b9fb6`)的内置任务名是 `summarize` / `translate` / `extract` / `classify` / `rewrite`;未命中时使用通用助手提示。
+**实现注(非规范)**:参考实现(`Laffinty/wlwl` 基线 `1a76635`)的内置任务名是 `summarize` / `translate` / `extract` / `classify` / `rewrite`;未命中时使用通用助手提示。
 
 ### 10.4 示例
 
