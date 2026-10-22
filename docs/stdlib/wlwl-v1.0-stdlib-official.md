@@ -208,7 +208,7 @@ PRINT(ASK_ALL(["a", "b"]));                     // [[mock-batch:0] echo (h=0xe40
 
 **实现注(非规范)**:参考实现(`Laffinty/wlwl` 基线 `35ba305`)的 mock 后端把 `opts` 解析为 `system`(STRING)、`max_tokens`(INTEGER)、`temperature`(FLOAT)三个键,其余键被忽略;`EMBED` 的缺省模型未设置环境变量时取 `"default"`,`COMPLETE` 的缺省语言取 `"wlwl"`。
 
-**实现注(非规范)**:参考实现在真实后端下把 HTTP 状态码映射为诊断码:401 / 403 → `E0081`,404 → `E0083`,其余 4xx → `E0093`,5xx → `E0094`;连接失败 → `E0090`,DNS 失败 → `E0091`,TLS 失败 → `E0092`;端点或凭据缺失 → `E0082`。
+**实现注(非规范)**:参考实现在真实后端下把 HTTP 状态码映射为诊断码:401 / 403 → `E0080`,其余 4xx(含 404)→ `E0093`,5xx → `E0094`;连接失败 → `E0090`,DNS 失败 → `E0091`,TLS 失败 → `E0092`;端点或凭据缺失 → `E0082`;响应体解析失败(不是合法 JSON / 缺 `choices[0].message.content`)→ `E0081`。⚠ 这些路径在 `real-ai` feature 之内 ⇒ **默认构建与 CI 跑不到** ⇒ 本仓的 CI **不能**给它们作证。
 
 **实现注(非规范)**:本包仍以 `wlwl-std` 的 `real-ai` feature 编译,没有独立 crate 边界与独立分发产物;`real-ai` 门控的是 HTTP 传输层,不是成员 —— 默认构建下五个成员全部可见可导入。
 
