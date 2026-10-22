@@ -26,9 +26,9 @@ concurrency:
 env:
   # 上游基线:**完整 40 位 SHA**。
   #
-  # ⚠⚠ 这里**不能写缩写**(`35ba305`)。`actions/checkout` 拿到缩写 SHA 时
+  # ⚠⚠ 这里**不能写缩写**(`46b153b`)。`actions/checkout` 拿到缩写 SHA 时
   # 认不出它是提交 —— 它会退化成「当分支 / 标签找」,于是 fetch 的是
-  # `+refs/heads/35ba305*` 与 `+refs/tags/35ba305*`,两者都不存在
+  # `+refs/heads/46b153b*` 与 `+refs/tags/46b153b*`,两者都不存在
   # ⇒ `git fetch` exit 1 ⇒ job 直接红(2026-10-21 首次运行即如此)。
   # 短形式只用于**人读**与下面的 grep 核对。
   #
@@ -37,11 +37,11 @@ env:
   #
   # ⚠⚠ **改基线时这一行与各册册首的基线行必须一起改** —— 下面的
   # 「核对上游提交与规范册首记录一致」这一步就是查这两处是否一致 ⇒
-  # 只改一边 ⇒ job 直接红(2026-10-22 踩过:册首跟到 35ba305 而这里还在
+  # 只改一边 ⇒ job 直接红(2026-10-22 踩过:册首跟到 46b153b 而这里还在
   # 1a76635 ⇒ grep 不到短形式 ⇒ 门禁红)。
-  WLWL_UPSTREAM_REF: 35ba30555d56d7480ad799205e9617d21255e97c
+  WLWL_UPSTREAM_REF: 46b153bb760644d0d71084caf90bc45fb5c952d1
   # 各册册首「上游基线」行记录的短形式(7 位)—— 核对与 grep 用它。
-  WLWL_UPSTREAM_SHORT: 35ba305
+  WLWL_UPSTREAM_SHORT: 46b153b
 
 jobs:
   check:
