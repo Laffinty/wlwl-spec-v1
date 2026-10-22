@@ -11,6 +11,7 @@
   5 实现注分离     —— 实现注段落必须独立成段
   6 成员面双向对拍 —— 注册镜像册附录 A ↔ 各章成员表:成员集合相等 + `[stub]` 标记一致
   7 示例有效性     —— wlwl 代码块必须在参考实现上运行且退出码为 0
+  8 失败口径对拍   —— 标准库册每一章的失败口径在参考实现上逐条对齐(一致性册 §6.2 的 V-05)
 
 另有两项实现层面的检查(章节号唯一性、相对链接有效)不在 §6.1 的七项里,
 但同样以错误级上报。
@@ -29,6 +30,7 @@
 """
 
 import argparse
+import io
 import os
 import re
 import subprocess
@@ -838,6 +840,708 @@ def check_stub_markers(files, errors, warns):
         print(f"  [stub] 标记对拍 —— {len(chapter_stubs)} 个桩成员,两侧一致")
 
 
+# ── 第 8 项:失败口径对拍(一致性册 §6.2 的 V-05) ──────────────────
+#
+# 规范侧:各标准库册**成员表**的「失败」列 ⇒ (成员 → 预期诊断码)。
+# 实现侧:实现仓的**断言位** ⇒ ((命名空间, 成员) → 已被钉住的诊断码)。
+# 两者相减 = 缺口清单。缺口**只报提示** —— 「没钉住」不是规范文本的错。
+
+# 语言核心册统一规定、**适用于全部成员**的两条码。
+# 这两条按**章级 blanket** 判定(每章 1–2 条代表性用例即可),
+# 不按「成员 × 码」逐个算缺口 —— 否则每个成员都会虚报两条,缺口清单失去意义。
+BLANKET_CODES = ("E0022", "E0030")
+
+# `ERR(E0047)` 形态:码在**诊断载荷**里 —— 与「诊断流」里的码是两回事。
+# 语言核心册 §11.2 把 E0046–E0049 定为诊断级,但 std.test 的失败列写的是
+# `ERR(E0047)`(成员把 ERR **值**交给调用方,不是中止运行的诊断)。
+PAYLOAD_CODE_RE = re.compile(r"ERR\s*\(\s*`?([EW]\d{4})`?\s*\)")
+
+# 成员表的**表头名** —— 按名字定位列,不写死下标。
+# v1.0 的成员表是 5 列(签名/语义/失败/复杂度/层),v0.11 的旧文本是 4 列
+# (签名/语义/失败/层)—— 失败列恰好都在第 3 格,但下标法一改版就崩。
+SIG_HEADER = "签名"
+FAIL_HEADER = "失败"
+
+# 成员表行里的分隔行:`|---|---|---|---|---|`
+SEP_CELL_RE = re.compile(r":?-{2,}:?")
+
+
+def _is_sep_row(cells):
+    body = [c.strip() for c in cells if c.strip()]
+    return bool(body) and all(SEP_CELL_RE.fullmatch(c) for c in body)
+
+
+def _clause_codes(clause):
+    """失败列**一句**里的诊断码 —— 区分「诊断流」与「诊断载荷」两个通道。
+
+    `ERR(E0047)` 里的码属载荷通道;其余裸码属诊断流通道。
+    """
+    payload = set()
+
+    def _take(m):
+        payload.add(m.group(1))
+        return " " * len(m.group(0))
+
+    rest = PAYLOAD_CODE_RE.sub(_take, clause)
+    out = {(c, "payload") for c in payload}
+    out |= {(c, "diag") for c in _codes_in_text(rest)}
+    return out
+
+
+def _iter_member_rows(files):
+    """遍历各标准库册**成员表**的数据行。
+
+    产出 (册内相对路径, 行号, 命名空间, 成员名列表, 失败列原文)。
+
+    七条解析规则(逐条对应实测踩出来的坑):
+
+    1. **按表头名定位「失败」列**,不写死列下标(5 列 / 4 列两版都吃);
+    2. **围栏先行** —— 先 `strip_code_blocks()` 再解析表格,否则示例代码块里的
+       `|` 会造出假行;
+    3. **转义竖线** —— 用 GFM 感知的 `split_cells()`,朴素 `split("|")` 会把
+       `ENV_GET(...) -> STRING` + 反斜杠竖线 这类签名格切碎;
+    4. **区间展开** —— `E0090`–`E0094` 沿用 `CODE_RANGE_RE`(三种破折号);
+    5. **`同上` 继承** —— 失败列写「同上」时继承同章上一成员行的失败列;
+    6. **多成员行逐成员分句** —— 失败列按 `;` 分句,句内出现被反引号包住的
+       成员名则该句只归属该成员,否则归属全行成员;
+    7. **成员名提取** —— 签名格按 `` `NAME( `` 取,同一格里的多个重载去重。
+    """
+    for p in files:
+        rel = os.path.relpath(p, REPO).replace("\\", "/")
+        if not rel.startswith("docs/stdlib/") or "registry" in rel:
+            continue
+        # 规则 2:围栏先行。
+        text, _ = strip_code_blocks(read(p))
+        cur_ns = None
+        sig_col = fail_col = None
+        in_table = False  # 上一行是不是表格行
+        for i, line in enumerate(text.split("\n"), 1):
+            if re.match(r"^#{1,6}\s", line):
+                # **任何**标题都重置「表状态」—— 标题带不带命名空间都一样。
+                # 只按「带命名空间的标题」重置表状态的话,`### 3.5 …` 这类
+                # 小节标题会让上一张成员表的列定位**继续生效** ⇒ 后面那张
+                # schema 表 / 情形表被当成员表解析,造出假错误。
+                h = re.match(
+                    r"^#{2,3}\s+.*`([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)?)`", line
+                )
+                if h:
+                    cur_ns = h.group(1)
+                sig_col = fail_col = None
+                in_table = False
+                continue
+            s = line.strip()
+            if not s.startswith("|"):
+                in_table = False
+                continue
+            # 规则 3:GFM 感知的切分(尊重转义竖线)。
+            cells = split_cells(s)
+            heads = [c.strip() for c in cells]
+            if not in_table:
+                # **新表** —— 上一张表的列定位作废。GFM 里两张表之间必有空行
+                # ⇒「上一行不是 `|` 开头」就是新表的铁证。不这么做,成员表
+                # 之后的任何表(记法表、schema 表、情形表)都会被当成员表解析,
+                # 造出几百条「解析不出成员名」的假错误。
+                in_table = True
+                sig_col = fail_col = None
+                # 规则 1:按表头名定位列 —— 只认「签名 + 失败」的表头。
+                if FAIL_HEADER in heads and SIG_HEADER in heads:
+                    sig_col = heads.index(SIG_HEADER)
+                    fail_col = heads.index(FAIL_HEADER)
+                continue
+            if _is_sep_row(cells):
+                continue  # 分隔行不是数据行
+            if cur_ns is None or fail_col is None:
+                continue
+            if sig_col >= len(cells) or fail_col >= len(cells):
+                yield (rel, i, cur_ns, [], "", "")  # 列数不足 —— 交给调用方报错
+                continue
+            # 规则 7:成员名提取(同一格里的多个重载去重)。
+            sig = cells[sig_col]
+            members = sorted(_members_from_signature_cell(sig))
+            fail = cells[fail_col].strip()
+            # 规则 5(「同上」继承)由调用方按章处理 —— 它需要跨行状态。
+            yield (rel, i, cur_ns, members, fail, sig.strip())
+
+
+def parse_failure_surface(files, errors):
+    """从各标准库册的**成员表**解析出 (命名空间, 成员) → 预期诊断码。
+
+    返回 {ns: {member: set((code, channel))}},channel ∈ {"diag", "payload"}。
+    """
+    surface = {}
+    conflicts = set()
+    prev_fail = {}  # (ns) → 同章上一成员行的失败列(已解引用)
+    for rel, i, ns, members, fail, sig in _iter_member_rows(files):
+        if not members:
+            errors.append(
+                f"{rel}:{i} 成员表行解析不出成员名 —— 签名格 {sig[:60]!r}"
+            )
+            continue
+        if fail in ("同上", "同上。"):
+            inherited = prev_fail.get(ns)
+            if inherited is None:
+                errors.append(
+                    f"{rel}:{i} 失败列写「同上」但同章没有上一成员行可继承"
+                )
+                continue
+            fail = inherited
+        elif not fail:
+            errors.append(f"{rel}:{i} 成员表的失败列为空 —— {'、'.join(members)}")
+            continue
+        prev_fail[ns] = fail
+        # 规则 6:逐成员分句。
+        for clause in fail.split(";"):
+            clause = clause.strip()
+            if not clause:
+                continue
+            named = [
+                m for m in re.findall(r"`([A-Z][A-Z0-9_]*)`", clause) if m in members
+            ]
+            targets = named if named else members
+            # 规则 4:区间展开在 _clause_codes / _codes_in_text 里。
+            for code, channel in _clause_codes(clause):
+                for mem in targets:
+                    bucket = surface.setdefault(ns, {}).setdefault(mem, set())
+                    bucket.add((code, channel))
+    # 归属冲突:同一 (成员, 码) 同时落在两个通道上 ⇒ 规范文本自相矛盾。
+    for ns, members in surface.items():
+        for mem, pairs in members.items():
+            by_code = {}
+            for code, channel in pairs:
+                by_code.setdefault(code, set()).add(channel)
+            for code, channels in by_code.items():
+                if len(channels) > 1:
+                    key = (ns, mem, code)
+                    if key in conflicts:
+                        continue
+                    conflicts.add(key)
+                    errors.append(
+                        f"失败口径归属冲突:{ns}::{mem} 的 {code} 同时被登记为"
+                        f"诊断流与诊断载荷 —— 同一 (成员, 码) 只能有一条通道"
+                    )
+    return surface
+
+
+def parse_member_namespaces(files):
+    """各标准库册的 (命名空间 → 成员名集合)。
+
+    与成员面对拍同一套读法,但**不**要求两侧相等 —— 这里要的是「这一章有哪些
+    成员」,供实现侧行内单测的归属判定用。
+    """
+    out = {}
+    for rel, i, ns, members, _fail, _sig in _iter_member_rows(files):
+        if members and ns:
+            out.setdefault(ns, set()).update(members)
+    return out
+
+
+# ── 实现侧 ─────────────────────────────────────────────────────
+
+# 实现仓的三个候选位置(按顺序):环境变量 → CI 的 upstream/ → 本地并列仓。
+IMPL_ENV_VAR = "WLWL_IMPL_PATH"
+
+
+def _impl_root_norm(p):
+    """把候选路径归一成「含 crates/ 的 impl 目录」。"""
+    p = os.path.normpath(p)
+    if os.path.isdir(os.path.join(p, "crates")):
+        return p
+    if os.path.isdir(os.path.join(p, "impl", "crates")):
+        return os.path.join(p, "impl")
+    return p
+
+
+def find_impl_root():
+    """找参考实现的**源码**目录(不是可执行文件)。
+
+    CI 把实现仓 checkout 到 `upstream/`(见 .github/workflows/spec-check.yml),
+    所以 impl 目录在 `upstream/impl`;本地并列放在 `../wlwl/impl`。
+    都找不到 ⇒ 返回 None(第 8 项报「已跳过」,**不得**当成通过)。
+    """
+    cands = []
+    env = os.environ.get(IMPL_ENV_VAR, "").strip()
+    if env:
+        cands.append(env)
+    cands.append(os.path.join(REPO, "upstream", "impl"))
+    cands.append(os.path.join(REPO, "..", "wlwl", "impl"))
+    for c in cands:
+        root = _impl_root_norm(c)
+        if os.path.isdir(os.path.join(root, "crates")):
+            return root
+    return None
+
+
+# 契约测试里的 IMPORT 路径 → 命名空间。
+IMPORT_PATH_RE = re.compile(r"IMPORT\s*\(\s*\"([^\"]+)\"")
+
+
+def _ns_of_import(path):
+    """IMPORT / SPEC 的路径 → 命名空间。认不出来就返回 None(不硬套)。"""
+    if path.startswith("wlwl:std."):
+        return path[len("wlwl:"):]
+    if path in ("ai:ask", "agent:task"):
+        return path.split(":")[0]
+    return None
+
+
+# `expect: "!E0030 MAP: …"` —— 诊断流;码后面可跟成员名。
+DIAG_EXPECT_RE = re.compile(r"^!([EW]\d{4})(?:\s+([A-Z][A-Z0-9_]*))?\b")
+# `expect: "[code: E0047, kind: …]"` —— 诊断载荷里的码。
+PAYLOAD_EXPECT_RE = re.compile(r"\bcode:\s*[\"']?([EW]\d{4})")
+# IMPORT 的成员数组:`["MAP", "FILTER"]` / `["TASK": "AGENT_TASK"]`(改名形态)。
+IMPORT_MEMBERS_RE = re.compile(r"IMPORT\s*\(\s*\"[^\"]+\"\s*,\s*\[(.*?)\]", re.S)
+IMPORT_MEMBER_RE = re.compile(
+    r"\"([A-Z][A-Z0-9_]*)\"\s*(?::\s*\"[A-Z][A-Z0-9_]*\")?"
+)
+
+
+def _imported_members(src):
+    out = set()
+    for m in IMPORT_MEMBERS_RE.finditer(src):
+        for name in IMPORT_MEMBER_RE.findall(m.group(1)):
+            out.add(name)
+    return out
+
+
+def _called_imported(src, imported):
+    """src 里**被调用**的已导入成员。
+
+    只认「已导入 ∧ 出现为调用」—— 否则 `IMPORT(..., ["MAP"])` 里的名字会把
+    源码里别处的同名标识符算进来。
+    """
+    out = set()
+    for name in imported:
+        if re.search(r"(?<![A-Z0-9_])" + re.escape(name) + r"\s*\(", src):
+            out.add(name)
+    return out
+
+
+def _derive_member(src):
+    """从 src 推出被断言的成员 —— 诊断文本里没带成员名时的回退。
+
+    只有**恰好一个**已导入成员被调用时才推得出来;多于一个 ⇒ 推不出 ⇒ 放弃
+    (宁可少算「已钉」,不可把没钉住的说成钉住了)。
+    """
+    called = _called_imported(src, _imported_members(src))
+    if len(called) == 1:
+        return next(iter(called))
+    return None
+
+
+def _case_pin(src, expect):
+    """一条契约用例 ⇒ (命名空间, 成员, 码, 通道) 或 None。
+
+    **只认断言位**:期望值里带 `!EXXXX`(诊断流)或 `code: EXXXX`(载荷)才算。
+    源码里的普通文本、注释、码注册表都不算。
+    """
+    nss = set()
+    for m in IMPORT_PATH_RE.finditer(src):
+        ns = _ns_of_import(m.group(1))
+        if ns:
+            nss.add(ns)
+    if len(nss) != 1:
+        return None
+    ns = nss.pop()
+    dm = DIAG_EXPECT_RE.match(expect)
+    if dm:
+        # 归属**优先按 src 推导**,消息里的成员名只作**兜底**。
+        #
+        # ⚠ 为什么不反过来:诊断消息里点名的成员常是**内部原因**,不是用户调的那个
+        # —— 例:`ABS` 的 INTEGER 下界报「!E0034 NEG: cannot negate INTEGER_MIN」
+        # (E0034 的规范语义就是「整数取负下界」,见语言核心册 §11.2),可用户调的是
+        # `ABS` ⇒ 按消息归属会把这条钉住算到 `NEG` 名下,于是 `std.math::ABS`
+        # 的 E0034 被误报成「未钉住」。⇒ 归属看**谁被调用**。
+        member = _derive_member(src) or dm.group(2)
+        if not member:
+            return None
+        return (ns, member, dm.group(1), "diag")
+    pm = PAYLOAD_EXPECT_RE.search(expect)
+    if pm:
+        member = _derive_member(src)
+        if not member:
+            return None
+        return (ns, member, pm.group(1), "payload")
+    return None
+
+
+RUST_RAW_STR_RE = re.compile(r'r#"(.*?)"#', re.S)
+RUST_STR_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
+RUST_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "0": "\0"}
+
+
+def _unescape_rust(s):
+    out = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s) and s[i + 1] in RUST_ESCAPES:
+            out.append(RUST_ESCAPES[s[i + 1]])
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _string_after(line, key):
+    """取 `key:` 之后的第一个 Rust 字符串字面量的值。"""
+    idx = line.find(key)
+    if idx < 0:
+        return None
+    rest = line[idx + len(key):]
+    m = RUST_RAW_STR_RE.search(rest)
+    if m:
+        return m.group(1)
+    m = RUST_STR_RE.search(rest)
+    if m:
+        return _unescape_rust(m.group(1))
+    return None
+
+
+def scan_contract_pins(impl_root):
+    """扫契约测试表(`crates/wlwl-eval/tests/*.rs`)里的断言位。
+
+    契约表是「成员 → 期望值」的冻结表,它的 `expect` 字段就是断言位:
+    `expect: "!E0030 MAP: …"`(诊断流)与 `expect: "[code: E0047, …]"`(载荷)。
+    命名空间取**同一条用例**的 `src` 里的 IMPORT 路径 ⇒ 跨章文件
+    (`str_math_contract.rs` 既有 std.str 又有 std.math)也不会串。
+    """
+    pins = set()
+    base = os.path.join(impl_root, "crates", "wlwl-eval", "tests")
+    if not os.path.isdir(base):
+        return pins
+    for name in sorted(os.listdir(base)):
+        if not name.endswith(".rs"):
+            continue
+        path = os.path.join(base, name)
+        with io.open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        last_src = None
+        for line in text.split("\n"):
+            if "src:" in line:
+                v = _string_after(line, "src:")
+                if v is not None:
+                    last_src = v
+            if "expect:" in line:
+                v = _string_after(line, "expect:")
+                if v is None or last_src is None:
+                    continue
+                pin = _case_pin(last_src, v)
+                if pin:
+                    pins.add(pin)
+    return pins
+
+
+# ── 通用断言行扫描(行内单测 / 非表格形态的契约测试)─────────────
+#
+# ⚠ 口径必须硬,否则假绿:
+#   · **注释先剥掉** —— 文档注释里满是码,那是说明不是断言;
+#   · **只认断言位** —— 断言宏的实参,以及「循环的集合字面量 + 循环体里有断言」;
+#   · **码注册表整个 crate 不进**(`wlwl-error`)—— 那是码的定义,不是断言;
+#   · **归属必须唯一** —— 命名空间从文件自身声明的路径取,取不唯一就整个文件不算。
+
+RUST_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+RUST_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+TEST_ATTR_RE = re.compile(r"#\[\s*test\s*\]")
+FN_NAME_RE = re.compile(r"\bfn\s+([a-z0-9_]+)\s*\(")
+ASSERT_MACRO_RE = re.compile(r"\bassert(?:_eq|_ne)?!\s*\(")
+ERROR_CODE_ENUM_RE = re.compile(r"ErrorCode::([EW]\d{4})")
+DIAG_CODE_STRING_RE = re.compile(r"\"!([EW]\d{4})")
+BARE_CODE_STRING_RE = re.compile(r"\"([EW]\d{4})")
+FOR_IN_LIST_RE = re.compile(r"\bfor\b[^;{}]*?\bin\s*\[")
+# 这些 crate 与「成员 → 失败口径」无关 —— 码注册表 / 类型系统 / 解析器。
+SKIP_CRATES = ("wlwl-error", "wlwl-types", "wlwl-lexer", "wlwl-parser", "wlwl-ast")
+
+
+def _strip_rust_comments(text):
+    text = RUST_BLOCK_COMMENT_RE.sub(" ", text)
+    return RUST_LINE_COMMENT_RE.sub(" ", text)
+
+
+def _file_ns_candidates(text, known_ns):
+    """文件级命名空间的**候选集**。
+
+    两处来源:模块自己声明的 `path: "wlwl:std.x"`,与文件里出现的
+    `IMPORT("wlwl:std.x", …)`。一个文件可能跨多个命名空间
+    (`fs_contract.rs` 同时碰 std.fs 与 std.env)⇒ 这里给**集合**,归属
+    交给每个测试函数单独解析(见 `_resolve_member`)。
+    """
+    nss = set()
+    for m in re.finditer(r"path:\s*\"([^\"]+)\"", text):
+        raw = m.group(1)
+        ns = _ns_of_import(raw)
+        if ns is None and raw in known_ns:
+            ns = raw
+        if ns:
+            nss.add(ns)
+    for m in IMPORT_PATH_RE.finditer(text):
+        ns = _ns_of_import(m.group(1))
+        if ns:
+            nss.add(ns)
+    return nss
+
+
+def _resolve_member(test_name, candidates, member_index):
+    """(测试函数名, 候选命名空间) → (命名空间, 成员) 或 None。
+
+    **必须唯一**:只有一个候选命名空间能把这个测试函数名认领成自己的成员
+    时才算数。认不出、或两个候选都认领(例如 `JOIN` 同属 std.collection 与
+    std.str)⇒ 放弃 —— 宁可多报缺口,不可错认命名空间。
+    """
+    matches = []
+    for ns in sorted(candidates):
+        members = member_index.get(ns)
+        if not members:
+            continue
+        m = _member_from_test_name(test_name, members)
+        if m:
+            matches.append((ns, m))
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _iter_test_fns(body):
+    """产出 (测试函数名, 函数体文本)。只认带 `#[test]` 的函数。"""
+    lines = body.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        if not TEST_ATTR_RE.search(lines[i]):
+            i += 1
+            continue
+        j = i
+        name = None
+        while j < n and j <= i + 3:
+            m = FN_NAME_RE.search(lines[j])
+            if m:
+                name = m.group(1)
+                break
+            j += 1
+        if name is None:
+            i += 1
+            continue
+        # 函数体:到第一个「整行只有 }」为止(rustfmt 的标准形状)。
+        k = j
+        while k < n and lines[k].strip() != "}":
+            k += 1
+        yield name, "\n".join(lines[j:min(k + 1, n)])
+        i = k + 1
+
+
+def _balanced(text, start, open_ch, close_ch):
+    """从 text[start] 处的括号开始,取配平后的**内容**。找不到就返回 None。"""
+    depth = 0
+    for j in range(start, len(text)):
+        if text[j] == open_ch:
+            depth += 1
+        elif text[j] == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:j], j
+    return None, -1
+
+
+def _codes_in_rust_text(text):
+    """一段 Rust 文本里的诊断码 —— 按**通道**分开。
+
+    · `ErrorCode::EXXXX` 与 `"!EXXXX"` ⇒ **诊断流**(`!` 是诊断显示形态的前缀);
+    · 裸的 `"EXXXX"` ⇒ **分不清**(既可能是诊断码被摘出来比对,也可能载荷里的
+      `code` 字段)⇒ 记成 `ambiguous`,匹配时可当任一通道用,但**不**参与
+      「诊断流 / 载荷」的精确判定。
+
+    契约表那侧(`expect:` 字段)是**精确**的:`!EXXXX` 是诊断流、`code: EXXXX`
+    是载荷 —— 两者不混。
+    """
+    diag = set(ERROR_CODE_ENUM_RE.findall(text))
+    diag |= set(DIAG_CODE_STRING_RE.findall(text))
+    ambiguous = set(BARE_CODE_STRING_RE.findall(text))
+    return diag, ambiguous
+
+
+def _asserted_codes(body):
+    """一个测试函数体里**被断言位**覆盖的诊断码。
+
+    只认两处:
+    1. 断言宏(`assert_eq!` / `assert!` / `assert_ne!`)的实参里出现的码;
+    2. `for … in [ … ]` 的**集合字面量**里出现的码 —— 但只在**同一个循环体
+       里有断言**时才认(否则只是数据,不是断言)。
+    """
+    diag, ambiguous = set(), set()
+    for m in ASSERT_MACRO_RE.finditer(body):
+        args, _end = _balanced(body, m.end() - 1, "(", ")")
+        if args is None:
+            continue
+        d, a = _codes_in_rust_text(args)
+        diag |= d
+        ambiguous |= a
+    for m in FOR_IN_LIST_RE.finditer(body):
+        lit, close = _balanced(body, m.end() - 1, "[", "]")
+        if lit is None:
+            continue
+        # 循环体里必须有断言,否则集合字面量只是数据。
+        if not ASSERT_MACRO_RE.search(body[close:]):
+            continue
+        d, a = _codes_in_rust_text(lit)
+        diag |= d
+        ambiguous |= a
+    return diag, ambiguous
+
+
+def _member_from_test_name(test_name, member_names):
+    """从 `#[test] fn <name>` 推出被测成员。
+
+    Rust 的测试名是 snake_case,成员名是 UPPER_SNAKE ⇒ 把成员名转成
+    snake 形态做**最长匹配**(`SORT_BY` 优先于 `SORT`)。匹配不上就放弃。
+    """
+    best = None
+    for m in member_names:
+        snake = m.lower()
+        if re.search(r"(?<![a-z0-9])" + re.escape(snake) + r"(?![a-z0-9])", test_name):
+            if best is None or len(m) > len(best):
+                best = m
+    return best
+
+
+def scan_assert_pins(impl_root, member_index):
+    """扫实现仓全部 .rs 里的**断言位**。
+
+    覆盖两类:
+      · `crates/*/src/**.rs` 的 `#[cfg(test)]` 行内单测;
+      · `crates/*/tests/*.rs` 的集成测试(整份文件都是测试)。
+    归属口径:命名空间取**文件自身声明**的路径(取不唯一 ⇒ 整个文件不算);
+    成员取 `#[test] fn <name>` 的最长匹配。取不到归属 ⇒ 不算已钉。
+    """
+    pins = set()
+    base = os.path.join(impl_root, "crates")
+    if not os.path.isdir(base):
+        return pins
+    known_ns = set(member_index)
+    for crate in sorted(os.listdir(base)):
+        if crate in SKIP_CRATES:
+            continue
+        for sub in ("src", "tests"):
+            root_dir = os.path.join(base, crate, sub)
+            if not os.path.isdir(root_dir):
+                continue
+            for root, _dirs, names in os.walk(root_dir):
+                for name in sorted(names):
+                    if not name.endswith(".rs"):
+                        continue
+                    path = os.path.join(root, name)
+                    with io.open(path, "r", encoding="utf-8") as f:
+                        raw = f.read()
+                    stripped = _strip_rust_comments(raw)
+                    candidates = _file_ns_candidates(stripped, known_ns)
+                    if not candidates:
+                        continue
+                    if sub == "src":
+                        cut = raw.find("#[cfg(test)]")
+                        if cut < 0:
+                            continue
+                        body = _strip_rust_comments(raw[cut:])
+                    else:
+                        body = stripped
+                    for test_name, fn_body in _iter_test_fns(body):
+                        resolved = _resolve_member(test_name, candidates, member_index)
+                        if resolved is None:
+                            continue
+                        ns, member = resolved
+                        diag, ambiguous = _asserted_codes(fn_body)
+                        for c in diag:
+                            pins.add((ns, member, c, "diag"))
+                        for c in ambiguous:
+                            pins.add((ns, member, c, "ambiguous"))
+    return pins
+
+
+def _is_pinned(pin_set, code, channel):
+    """(成员, 码, 通道) 是否已被实现侧钉住。
+
+    `ambiguous`(裸字符串码,分不清是诊断流还是载荷)可当任一通道用;**精确**
+    的通道不互相顶替 —— 诊断流 ≠ 载荷。
+    """
+    return (code, channel) in pin_set or (code, "ambiguous") in pin_set
+
+
+def check_failure_surface(files, errors, warns):
+    """第 8 项:标准库册的失败口径逐条对齐(一致性册 §6.2 的 V-05)。
+
+    规范侧解析出「成员 → 预期诊断码」,实现侧扫断言位算出「哪些 (成员, 码)
+    已被钉住」,两者相减 = **缺口清单**。
+
+    缺口只报**提示**:「没钉住」不是规范文本的错,是覆盖面的事实陈述。
+    错误级只报规范文本自身的问题(空失败列 / 解析不出成员名 / 归属冲突)。
+    """
+    surface = parse_failure_surface(files, errors)
+    member_index = parse_member_namespaces(files)
+    if not surface:
+        warns.append("第 8 项(失败口径对拍)已跳过:各标准库册没有可解析的成员表")
+        return
+
+    impl_root = find_impl_root()
+    if not impl_root:
+        warns.append(
+            "第 8 项(失败口径对拍)已跳过:未找到参考实现的源码目录"
+            f"(查过 ${IMPL_ENV_VAR}、upstream/impl、../wlwl/impl)—— "
+            "**已跳过不等于通过**"
+        )
+        return
+
+    pins = scan_contract_pins(impl_root) | scan_assert_pins(impl_root, member_index)
+    pinned = {}
+    for ns, member, code, channel in pins:
+        pinned.setdefault((ns, member), set()).add((code, channel))
+
+    total_members = total_pairs = total_pinned = total_gaps = 0
+    for ns in sorted(surface):
+        members = surface[ns]
+        pairs = set()
+        for mem, codes in members.items():
+            for code, channel in codes:
+                if code in BLANKET_CODES:
+                    continue
+                pairs.add((mem, code, channel))
+        codes_in_chapter = {c for _m, c, _ch in pairs}
+        got = set()
+        for mem, code, channel in pairs:
+            if _is_pinned(pinned.get((ns, mem), ()), code, channel):
+                got.add((mem, code, channel))
+        gaps = sorted(pairs - got)
+        # 章级 blanket:E0022 / E0030 每章 1–2 条代表性用例即可。
+        blanket_gaps = []
+        for bc in BLANKET_CODES:
+            has = any(
+                _is_pinned(pinned.get((ns, mem), ()), bc, "diag") for mem in members
+            )
+            if not has:
+                blanket_gaps.append(bc)
+        n_members = len(member_index.get(ns, members))
+        total_members += n_members
+        total_pairs += len(pairs)
+        total_pinned += len(got)
+        total_gaps += len(gaps) + len(blanket_gaps)
+        print(
+            f"  失败口径对拍:{ns} —— 成员 {n_members} / 码种 {len(codes_in_chapter)} / "
+            f"(成员,码)对 {len(pairs)} / 已钉 {len(got)} / 缺口 {len(gaps) + len(blanket_gaps)}"
+        )
+        for bc in blanket_gaps:
+            warns.append(
+                f"失败口径对拍缺口:{ns} —— 章级 blanket {bc} 的失败口径未被钉住"
+                "(语言核心册规定它适用于全部成员,每章 1–2 条代表性用例即可)"
+            )
+        for mem, code, channel in gaps:
+            warns.append(
+                f"失败口径对拍缺口:{ns}::{mem} —— 失败口径未被钉住"
+                f"(预期 {code} {channel};实现侧没有钉住它的断言位)"
+            )
+    print(
+        f"  失败口径对拍合计 —— 成员 {total_members} / (成员,码)对 {total_pairs} / "
+        f"已钉 {total_pinned} / 缺口 {total_gaps}(实现仓:{impl_root})"
+    )
+
+
+
 def check_samples(files, impl, errors, warns):
     if not impl:
         warns.append("第 7 项(示例有效性)已跳过:未提供 --impl")
@@ -908,6 +1612,7 @@ def main():
     check_diag_attribution(files, errors, warns)
     check_member_surface(files, errors, warns)
     check_stub_markers(files, errors, warns)
+    check_failure_surface(files, errors, warns)
     check_links(errors)
     n_samples = check_samples(files, args.impl, errors, warns)
 
@@ -932,6 +1637,8 @@ def main():
                 k = "规范用语未加粗"
             elif "实现注段落含规范关键词" in w:
                 k = "实现注未与规范条款分离"
+            elif "失败口径对拍缺口" in w:
+                k = "失败口径对拍缺口(第 8 项)"
             else:
                 k = "其它"
             cats[k] = cats.get(k, 0) + 1
