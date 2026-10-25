@@ -31,6 +31,7 @@
 | [`docs/roadmap/wlwl-v1.0-roadmap.md`](docs/roadmap/wlwl-v1.0-roadmap.md) | 演进蓝图:**非规范**。已裁定的设计选择、已否决方向、尚未立项的候选 |
 | [`docs/audit/audit-disposition.md`](docs/audit/audit-disposition.md) | 第三方审计意见的逐条处置:核验结论、采纳与否、理由与落点 |
 | [`docs/plan/wlwl-v1.0.2-build-plan.md`](docs/plan/wlwl-v1.0.2-build-plan.md) | **v1.0.2 / v0.12.0 构建方案**:**非规范**。规范侧条款级施工图 + 实现侧构建要求 + 对上游技术验证成果的逐条裁决 + 待确认的措辞级问题 |
+| [`docs/plan/wlwl-v1.0.2-release-gate-checklist.md`](docs/plan/wlwl-v1.0.2-release-gate-checklist.md) | **v1.0.2 发布闸门验收清单**:**非规范**。把一致性册 §3.5 的四条与 §6.2 的六项拆成「谁在哪个仓做什么 / 验收命令 / 读数长什么样」—— 规范侧与实现侧用同一份判据 |
 
 ## 怎么读
 
