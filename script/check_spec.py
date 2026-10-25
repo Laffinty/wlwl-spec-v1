@@ -10,8 +10,19 @@
   4 规范性用语加粗 —— 必须 / 不得 / 应当 / 可以 作规范关键词时必须加粗
   5 实现注分离     —— 实现注段落必须独立成段
   6 成员面双向对拍 —— 注册镜像册附录 A ↔ 各章成员表:成员集合相等 + `[stub]` 标记一致
-  7 示例有效性     —— wlwl 代码块必须在参考实现上运行且退出码为 0
+  7 示例有效性     —— wlwl 代码块必须在参考实现上运行;默认退出码为 0;标注了预期诊断的块必须报出该码
   8 失败口径对拍   —— 标准库册每一章的失败口径在参考实现上逐条对齐(一致性册 §6.2 的 V-05)
+
+**第 7 项的「预期诊断」注解**(v1.0.2 新增):
+
+`wlwl` 块的**首行**可以是一条 `// expect: <CODE>` 注释(`<CODE>` 形如 `E0103`),
+也可以带消息子串(`// expect: E0103 unhandled ERR was discarded` ⇒ 诊断消息必须含该子串)。
+
+* 带注解的块 ⇒ **必须**非零退出**且** stderr 里报出该诊断码(带子串时还必须含该子串)⇒ 才算通过;
+  码不符 / 退出码为 0 ⇒ **判红**。
+* 不带注解的块 ⇒ 仍**必须**退出码 0(行为不变)。
+* 一个块最多一条注解;必须在首行;只能是 `//` 行注释(`#` 不是 WLWL 的注释)。
+* 注解只对 `wlwl` 围栏的块生效;其它语言的围栏不受影响。
 
 另有两项实现层面的检查(章节号唯一性、相对链接有效)不在 §6.1 的七项里,
 但同样以错误级上报。
@@ -1694,6 +1705,47 @@ def check_failure_surface(files, errors, warns):
 
 
 
+# 参考实现 stderr 里的诊断行 —— 与交付包 `probe/spec-conformance/run_all.py`
+# 的 `DIAG_RE` **逐字同口径**(码 + 消息):
+#     error[E0103]: unhandled ERR was discarded: NULL
+# 第 7 项的「预期诊断」注解按这一套解析;`negctl.py` 的阴性对照 import
+# **本文件**的这一个定义 ⇒ 两边不可能口径漂移。
+DIAG_RE = re.compile(r"^error\[([A-Z]\d{4})\]:\s*(.*)$", re.M)
+
+# 「预期诊断」注解 —— `wlwl` 块的**首行**:
+#     // expect: E0103
+#     // expect: E0103 unhandled ERR was discarded
+# 只能是 `//` 行注释(`#` 不是 WLWL 的注释);一个块最多一条;必须在首行。
+EXPECT_LINE_RE = re.compile(r"^\s*//\s*expect:")
+EXPECT_RE = re.compile(r"^//\s*expect:\s*([A-Z]\d{4})(?:\s+(.*))?$")
+
+
+def parse_expect(body):
+    """解析 `wlwl` 块的「预期诊断」注解。
+
+    返回 (注解, 错误列表)。注解 = (码, 消息子串) 或 None;
+    错误列表是**注解本身写错了**的情形(不在首行 / 一块多条 / 形态非法)。
+    """
+    lines = body.split("\n")
+    hits = [(i + 1, ln) for i, ln in enumerate(lines) if EXPECT_LINE_RE.match(ln)]
+    if not hits:
+        return None, []
+    errs = []
+    if len(hits) > 1:
+        errs.append(f"一个 wlwl 代码块最多一条 expect 注解(实际 {len(hits)} 条)")
+    lineno, line = hits[0]
+    if lineno != 1:
+        errs.append(f"expect 注解必须在 wlwl 代码块的首行(实际在第 {lineno} 行)")
+    m = EXPECT_RE.match(line.strip())
+    if not m:
+        errs.append(
+            f"expect 注解形态非法: {line.strip()!r}"
+            "(应为 `// expect: E0103` 或 `// expect: E0103 消息子串`)"
+        )
+        return None, errs
+    return (m.group(1), (m.group(2) or "").strip()), errs
+
+
 def check_samples(files, impl, errors, warns):
     if not impl:
         warns.append("第 7 项(示例有效性)已跳过:未提供 --impl")
@@ -1706,6 +1758,11 @@ def check_samples(files, impl, errors, warns):
             if lang != "wlwl":
                 continue
             total += 1
+            expect, ann_errs = parse_expect(body)
+            for a in ann_errs:
+                msg = f"{rel} 第 {total} 个 wlwl 代码块:{a}"
+                errors.append(msg)
+                gh_error(rel, idx, msg)
             with tempfile.NamedTemporaryFile(
                 "w", suffix=".wll", delete=False, encoding="utf-8", newline="\n"
             ) as tf:
@@ -1720,10 +1777,43 @@ def check_samples(files, impl, errors, warns):
                     errors="replace",
                     timeout=60,
                 )
-                if r.returncode != 0:
+                rc = r.returncode
+                err = r.stderr or ""
+                diags = [(c, m.strip()) for c, m in DIAG_RE.findall(err)]
+                if expect is None:
+                    # 无注解 ⇒ 仍**必须**退出码 0(行为不变)。
+                    if rc != 0:
+                        msg = (
+                            f"{rel} 第 {total} 个 wlwl 代码块运行失败(rc={rc}): "
+                            f"{(err or r.stdout).strip()[:120]}"
+                        )
+                        errors.append(msg)
+                        gh_error(rel, idx, msg)
+                    continue
+                # 带注解 ⇒ 必须非零退出**且**报出该码(带子串时还必须含该子串)。
+                code, sub = expect
+                if rc == 0:
                     msg = (
-                        f"{rel} 第 {total} 个 wlwl 代码块运行失败(rc={r.returncode}): "
-                        f"{(r.stderr or r.stdout).strip()[:120]}"
+                        f"{rel} 第 {total} 个 wlwl 代码块预期诊断 {code} 未出现"
+                        "(实际 rc=0 —— 标注了预期诊断的示例必须非零退出)"
+                    )
+                    errors.append(msg)
+                    gh_error(rel, idx, msg)
+                    continue
+                hits = [(c, m) for c, m in diags if c == code]
+                if not hits:
+                    actual = ",".join(c for c, _ in diags) or "无"
+                    msg = (
+                        f"{rel} 第 {total} 个 wlwl 代码块预期诊断 {code} 未出现"
+                        f"(实际 rc={rc},实际诊断码 {actual}): "
+                        f"{(err or r.stdout).strip()[:120]}"
+                    )
+                    errors.append(msg)
+                    gh_error(rel, idx, msg)
+                elif sub and not any(sub in m for _c, m in hits):
+                    msg = (
+                        f"{rel} 第 {total} 个 wlwl 代码块预期诊断 {code} 的消息"
+                        f"不含子串 {sub!r}(实际消息: {hits[0][1][:120]})"
                     )
                     errors.append(msg)
                     gh_error(rel, idx, msg)
