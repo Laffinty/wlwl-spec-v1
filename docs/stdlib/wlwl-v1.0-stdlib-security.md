@@ -105,13 +105,15 @@
 
 本册**唯一**的跨册差异登记是:`ERR` 的产生与消费规则。语言核心册 §8.6 规定"未消费的 `ERR` **不得**被丢弃",本册各章的「失败」列**只**描述成员自身在失败时**返回什么**,**不**复述 §8.6 —— `ERR` 值的丢弃与报告一律由 §8.6 承担。
 
-> 上游基线:Laffinty/wlwl 提交 46b153b(2026-10-22,含 v1.0 语义落地(E0103 批次、字典哈希索引、别名形态收敛)与 V-02 / V-04 / V-05 取证守卫)。
+> 上游基线:Laffinty/wlwl 提交 99041ef(2026-10-24,已发布 tag v0.11.4;含 v1.0 语义落地(E0103 批次、字典哈希索引、别名形态收敛)与 V-02 / V-04 / V-05 取证守卫,以及一致性册 §5.4 的 13 条收敛)。
 
 ## 11 `std.encode` —— 编码与哈希
 
-base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要、口令派生、随机源与常数时间比较。
+base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2)、**字节层**(字符串 ↔ UTF-8 字节),以及单向摘要、口令派生、随机源与常数时间比较。
 
 编码类成员都作用在**字节**上,而本语言的 `STRING` 是 UTF-8:编码成员**必须**取实参的 UTF-8 字节,解码成员**必须**在结果为合法 UTF-8 时才交出 `STRING`。摘要类成员同口径取 UTF-8 字节。
+
+**字节的唯一表示是 `ARRAY[INTEGER]`**(元素 `0..=255`)—— 这条是**规范条款**,不是实现现状的描述,完整规定见 §11.3 第 4 条。字节层三成员 `UTF8_ENCODE` / `UTF8_DECODE` / `BYTE_LEN` 就是它的读写两侧。
 
 本节 `n` 取被操作文本的 **UTF-8 字节数**;`TIMING_SAFE_EQ` 取两段实参字节长度的较大者,`RANDOM_BYTES` / `RANDOM_HEX` 取请求的字节数。语言核心册 §18.1 对字符串默认取码点数 —— UTF-8 每码点占 1 到 4 字节,两者相差一个常数因子,故上界一致。
 
@@ -121,13 +123,13 @@ base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要�
 
 | 类别 | 触发 | 形态 |
 |---|---|---|
-| 程序员错误 | 元数不符、实参类型不符、KDF 参数越界、`algo` 取值未知、`salt` 不是偶长十六进制文本、`RANDOM_BYTES` / `RANDOM_HEX` 的 `n` 为负 | 原生诊断 `E0022` / `E0030` |
-| 数据违例 | 解码输入畸形,或解出的字节不是合法 UTF-8 | `ERR` 值,载荷 `kind` = `"DecodeError"` |
+| 程序员错误 | 元数不符、实参类型不符、KDF 参数越界、`algo` 取值未知、`salt` 不是偶长十六进制文本、`RANDOM_BYTES` / `RANDOM_HEX` 的 `n` 为负、`UTF8_DECODE` 的字节元素超出 `0..=255` | 原生诊断 `E0022` / `E0030` |
+| 数据违例 | 解码输入畸形,或字节序列不是合法 UTF-8(解出的字节,或 `UTF8_DECODE` 的输入) | `ERR` 值,载荷 `kind` = `"DecodeError"` |
 | 环境失败 | 操作系统熵源读失败 | 原生诊断 `E0060` |
 
 **解码失败是域违例**,返回 `ERR` **值**而不是诊断。它**不**叫 `DomainError` —— 把「`SQRT(-1)`」和「base64 串少了一个字符」归成同一个 `kind`,会让调用方没法区分。
 
-**编码永不失败**:三个 `*_ENCODE` 成员的「失败」列是 `—`。
+**编码永不失败**:四个 `*_ENCODE` 成员(`BASE64_ENCODE` / `HEX_ENCODE` / `URL_ENCODE` / `UTF8_ENCODE`)的「失败」列是 `—`。`UTF8_ENCODE` 的实参是 `STRING`,而 `STRING` **恒**是合法 UTF-8,所以它没有可失败的输入。
 
 解码失败的 `ERR` 载荷**必须**是字典,含 `kind` / `op` / `reason` 三个键:
 
@@ -159,7 +161,7 @@ base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要�
 | `RANDOM_BYTES` / `RANDOM_HEX` 的 `n` 为负 | `E0030` |
 | 操作系统熵源读失败 | `E0060` |
 
-解码成员的失败形态全部返回 `ERR` 值,**不**产生诊断:
+解码成员的**数据违例**全部返回 `ERR` 值,**不**产生诊断;实参层的错(元数不符、实参类型不符、字节元素越界)仍走 `E0022` / `E0030` 诊断。
 
 | 失败形态 | 所属成员 |
 |---|---|
@@ -173,6 +175,7 @@ base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要�
 | 百分号转义被截断 | `URL_DECODE` |
 | 百分号转义含非十六进制字符 | `URL_DECODE` |
 | 解出的字节不是合法 UTF-8 | 三个解码成员 |
+| 输入的字节序列不是合法 UTF-8(非法序列 / 截断的多字节序列) | `UTF8_DECODE` |
 
 ### 11.2 成员表
 
@@ -184,6 +187,9 @@ base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要�
 | `HEX_DECODE(s) -> STRING` | 大小写都收;不忽略任何字符 | 失败 → `ERR([kind: "DecodeError", op, reason])` | `O(n)` | R2 |
 | `URL_ENCODE(s) -> STRING` | percent-encoding;`unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"`,其余 `%XX`(大写十六进制) | — | `O(n)` | R2 |
 | `URL_DECODE(s) -> STRING` | 解 `%XX`;**`+` 不折成空格**(见 §11.3 第 2 条) | 失败 → `ERR([kind: "DecodeError", op, reason])` | `O(n)` | R2 |
+| `UTF8_ENCODE(s) -> ARRAY[INTEGER]` | 字符串 → UTF-8 字节;返回**整数数组**(元素 `0..=255`),**不是** `STRING`(见 §11.3 第 4 条) | — | `O(n)` | R2 |
+| `UTF8_DECODE(bytes) -> STRING` | UTF-8 字节 → 字符串;⚠ **不做有损替换**(见 §11.3 第 3 条);`UTF8_DECODE(UTF8_ENCODE(s))` 恒等于 `s` | 失败 → `ERR([kind: "DecodeError", op, reason])`;字节元素超出 `0..=255` → `E0030` | `O(n)` | R2 |
+| `BYTE_LEN(s) -> INTEGER` | 字符串的 **UTF-8 字节数** —— **不是**码点数(全局内建 `LEN` 给的是码点数,见语言核心册 §10.3) | — | `O(n)` | R2 |
 | `SHA256(data) -> STRING` | SHA-256(FIPS 180-4);输入按 UTF-8 字节,输出**小写十六进制**(64 字符) | 元数错 `E0022`;类型错 `E0030` | `O(n)` | R2 |
 | `HMAC_SHA256(key, data) -> STRING` | HMAC-SHA256(RFC 2104);`key` / `data` 均按 UTF-8 字节;密钥超过块长(64 字节)先哈希再补零 | 元数错 `E0022`;类型错 `E0030` | `O(n)` | R2 |
 | `PBKDF2_ITER(password, salt, iter, len, algo) -> STRING` | PBKDF2-HMAC-SHA256(RFC 8018 §5.2);`salt` 是**十六进制文本**;输出**小写十六进制**。`algo` 当前**只接受 `"sha256"`** —— 签名保留该形参是留位,SHA-512 不提供(见 §11.5) | 参数越界、`algo` 取值未知、`salt` 非偶长 hex、类型错 → `E0030`;元数错 `E0022` | `O(n)`(哈希部分) | R2 |
@@ -195,6 +201,10 @@ base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要�
 **两个 KDF 的总代价由迭代参数决定,不由输入大小决定。** 成员表里那两个 `O(n)` 只计哈希部分(对输入字节数线性);`PBKDF2_ITER` 的实际代价由 `iter` 决定,`ARGON2ID` 的实际代价由 `t_cost` / `m_cost` / `p_cost` 决定。两者**不得**被读成「口令越长越慢」。
 
 #### 11.2.1 值形状与边界
+
+**字节的唯一表示是 `ARRAY[INTEGER]`(元素 `0..=255`)** —— 这条是**规范条款**(§11.3 第 4 条),不是实现现状的描述。`RANDOM_BYTES` / `UTF8_ENCODE` 返回它,`UTF8_DECODE` 收它;标准库·系统册 §2.2 的 `READ_BYTES` / `WRITE_BYTES` 用的是同一个形状(既有约定),标准库·系统册 §21 的传输层成员同样用它。
+
+**`BYTE_LEN` 给的是字节数,`LEN` 给的是码点数。** 两者在纯 ASCII 上相等,别处不等:`BYTE_LEN("héllo")` = **6**(5 个码点,6 个字节),而 `LEN("héllo")` = 5。⚠ 协议层的 `Content-Length` 计的是**字节** —— 拿 `LEN` 去填它,非 ASCII 的内容会算少。
 
 **`RANDOM_BYTES` 返回整数数组,不是 `STRING`** —— 这是本语言唯一能无损承载任意字节串的形态。名字说的是「字节」,而 wlwl 没有字节类型;硬塞进 `STRING` 只能把非法 UTF-8 有损替换成 `U+FFFD`,而本册**不**提供有损替换(§11.3 第 3 条)。**要文本就用 `RANDOM_HEX`。**
 
@@ -218,7 +228,7 @@ base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要�
 
 **诚实边界:耗时仍依赖长度**(比较多少字节就走多少步),这无法避免也不必避免 —— 要隐藏的是「哪几个字节不同」与「是否相等」,不是长度。
 
-### 11.3 三条需要明写的设计取舍
+### 11.3 四条需要明写的设计取舍
 
 **1. 解码自动识别 base64 字母表。** `BASE64_DECODE` **必须**同时接受 RFC 4648 的标准字母表与 URL 字母表。
 
@@ -229,6 +239,12 @@ base64(RFC 4648 §4)、hex、percent-encoding(RFC 3986 §2),以及单向摘要�
 **说明**:`+` → 空格是 `application/x-www-form-urlencoded` 的规则。Go 的 `url.QueryUnescape` 做这个替换,`url.PathUnescape` 不做;本成员对标后者。表单编码请自己处理。
 
 **3. 解码不做有损替换。** 解码成员**不得**对不合法的字节做有损替换;解出的字节不是合法 UTF-8 时**必须**返回 `ERR` 值(`kind` = `"DecodeError"`)。这同时意味着**不能通过 `STRING` 携带任意二进制** —— 要传二进制得先 base64 / hex,再在对面解回 `STRING`。
+
+**4. 字节的唯一表示是 `ARRAY[INTEGER]`。** 承载字节的成员**必须**用 `ARRAY[INTEGER]` 表示,元素取值 `0..=255`;标准库里**不得**并存第二套字节表示。
+
+**说明**:这条此前只是**事实**(各处都这么用),没有**条款** —— 每个新成员都得自己决定「字节长什么样」,决定得不一样时没有任何机制能发现。形状一旦成文,漂移就无处藏身。
+
+**与既有表示一致**:标准库·系统册 §2.2 的 `READ_BYTES` / `WRITE_BYTES`、本册的 `RANDOM_BYTES` / `UTF8_ENCODE` / `UTF8_DECODE`、标准库·系统册 §21 的传输层成员,用的都是这个形状(元素 `0..=255`)。⚠ `STRING` **不是**字节表示 —— 它是 UTF-8 文本,装不下任意二进制;硬塞只能有损替换成 `U+FFFD`,而本册**不**提供有损替换(本节第 3 条)。
 
 ### 11.4 RFC 测试向量
 
@@ -340,3 +356,5 @@ PRINT(TIMING_SAFE_EQ(stored, ARGON2ID("wrong horse battery staple", salt, 2, 194
 编码族随 v0.11.2 M1 落地;摘要与 KDF 随 v0.11.3 M2 / M6 落地。KDF 的上下界取 OWASP 2025 最小配置;`ARGON2ID` 不收 `secret` / `assoc` 的实测证据见实现仓 `docs/history/addendum-04-crypto-kdf-secrets.md` §3.4。KDF 的性能读数取自实现仓 `impl/crates/wlwl-eval/benches/baseline.txt` 的 KDF 段。
 
 本章的规范文本上游是实现仓 `Laffinty/wlwl`(基线提交见册首的「上游基线」行):成员签名与失败行为以该仓的 `impl/crates/wlwl-std/src/encode.rs` 为准,向量以 RFC 4648 §10、RFC 4231 §4 与 FIPS 180-4 为准。
+
+字节层三成员(`UTF8_ENCODE` / `UTF8_DECODE` / `BYTE_LEN`)是 v1.0.2 新增的公共面成员,契约见本册 §11.2 与 §11.3 第 4 条;它们的实现随实现仓的 v0.12.0 落地 —— 本册只写契约。
