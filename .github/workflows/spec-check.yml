@@ -44,9 +44,9 @@ env:
   # 「核对上游提交与规范册首记录一致」这一步就是查这两处是否一致 ⇒
   # 只改一边 ⇒ job 直接红(2026-10-22 踩过:册首跟到 46b153b 而这里还在
   # 1a76635 ⇒ grep 不到短形式 ⇒ 门禁红)。
-  WLWL_UPSTREAM_REF: 99041ef878f679070ffb2f6d0692e3cee280efa6
+  WLWL_UPSTREAM_REF: 176603220602d705c56f0da3d11895dfb3304c84
   # 各册册首「上游基线」行记录的短形式(7 位)—— 核对与 grep 用它。
-  WLWL_UPSTREAM_SHORT: 99041ef
+  WLWL_UPSTREAM_SHORT: 1766032
 
 jobs:
   check:
