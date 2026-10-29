@@ -212,6 +212,7 @@ PRINT(JSON_CHUNK_ITEMS(PARSE("[1,2,3,4,5]"), 2));  // [[1, 2], [3, 4], [5]]
 | 签名 | 语义 | 失败 | 复杂度 | 层 |
 |---|---|---|---|---|
 | `FORMAT(template, args...) -> STRING` | `{N}` 以第 `N` 个实参的 `STR` 渲染替换;`{name}` 以首个实参为字典按键取值;两类占位符可混用。未匹配的 `{...}` 原样保留 | 模板畸形(孤立的 `{`)→ `E0039` | `O(n + m)` | R2 |
+| `FORMAT_NAMED(template, args...) -> STRING` | **具名占位**:`{name}` 在**全部** `DICT` 实参里按出现序查找(首个命中者胜出;`FORMAT` 只认首个 `DICT`),`{N}` 同 `FORMAT` 的位置语义;占位符可带格式说明 `{name:spec}`(`[[fill]align][width]`,按码点填充,缺省左对齐);未匹配的占位符(含格式说明)原样保留,缺键**不**报错;既有 `FORMAT` 一字不动 | 模板畸形 / 空占位符 / 空名字 → `E0039`;元数 / 类型错 → `E0022` / `E0030` | `O(n + m)` | R2 |
 
 ### 4.1 `RESULT` 的渲染:两条路径**刻意不同**
 
@@ -347,6 +348,7 @@ PRINT(GROUP_BY([1, 2, 3], FUN((x), %(x, 2))));  // [1: [1, 3], 0: [2]]
 | `INDEX_OF(s, sub, from?) -> INTEGER` | `sub` 首次出现的**码点**下标(0 起),无则 `-1`;`from` 把起点推到后面(负值钳到 0),默认 0 | 实参非 `STRING` → `E0030`;`sub` 为空串 → `E0030` | `O(n·m)` 最坏 | R1 |
 | `CONTAINS_SUB(s, sub) -> BOOLEAN` | `sub` 是否出现 | 实参非 `STRING` → `E0030`;`sub` 为空串 → `E0030` | `O(n·m)` 最坏 | R1 |
 | `CAT(parts...) -> STRING` | **变长**拼接:按给定次序把若干段拼成一个字符串。非字符串段按 `STR` 渲染(语言核心册 §2.5、§10.3)后再拼 | — | `O(m)` | R2 |
+| `QUERY_PARSE(q) -> DICT` | 解析 URL query 串:`&` 分对、`=` 只切第一个(`a=b=c` ⇒ 键 `a` 值 `b=c`);`+` ⇒ 空格、`%XX` 百分号解码(先 `+` 后 `%XX`,顺序固定);重复键 ⇒ 值升级 `ARRAY[STRING]`(按出现序);空串 ⇒ 空字典;无 `=` 的键 ⇒ 值 `""`;空段跳过 | 非法百分号转义 → `ERR([kind: "QueryError", op, reason])`(**值**);元数 / 类型错 → `E0022` / `E0030` | `O(n)` | R1 |
 
 **`CAT` 的全部意义是「变长」。** 语言的 `+` 是**二元**的 ⇒ 拼 `N` 段**必须**嵌套 `N − 1` 次 ⇒ 段数不定时调用方写不出固定元数的调用。`CAT` 收**任意个数**的段(实参**可以**零个、一个或多个),按给定次序依次拼接,段间**不**插任何分隔符。
 
@@ -593,6 +595,13 @@ R1 门面 + R2 原生内核(注册与计时)。
 | `ASSERT_EQ(a, b)` / `ASSERT_NEQ(a, b)` | 相等 / 不等断言;成功 → `OK(TRUE)` | `ASSERT_EQ` 不成立 → `ERR(E0047)`;`ASSERT_NEQ` 成立 → `ERR(E0048)` | `O(n)` | R1 门面 + R2 内核 |
 | `EXPECT_ERR(x)` | `x` 为 `ERR` → `OK(载荷)`;否则 `ERR(E0049)` | — | `O(1)` | R1 门面 + R2 内核 |
 | `RUN_TESTS() -> ARRAY` | 调用所有已注册体,返回记录数组;每条记录是字典,至少含 `name`(STRING)、`passed`(BOOLEAN)、`duration_ms`(INTEGER),并按结果附 `return_value` 或 `error` | — | — | R1 门面 + R2 内核 |
+| `ASSERT_MSG(cond, message)` | 与 `ASSERT` 同一真值口径(八个假值),但 `message` **必需**且**必须**是 `STRING`;为真 → `OK(TRUE)`,否则 `ERR(E0046)`(载荷含 `msg`) | `message` 非 `STRING` → `E0030`;元数错 → `E0022` | `O(1)` | R1 门面 + R2 内核 |
+| `ASSERT_TRUE(value)` | **宽松口径**断言:只有 `FALSE` / `NULL` 为假(`0` / `""` / 空数组等**都**为真);为真 → `OK(TRUE)`,否则 `ERR(E0046)` | 元数错 → `E0022` | `O(1)` | R1 门面 + R2 内核 |
+| `EXPECT_ERR_CODE(fn, code)` | 调用 `fn`(零参)**捕获原生诊断**并比对码:命中 → `OK([code, message])`;没抛诊断 / 码不符 → `ERR(E0049)`(`kind` 区分情形);`fn` 的返回值不参与判定 | 实参类型错 → `E0030`;元数错 → `E0022` | `O(1)` | R1 门面 + R2 内核 |
+| `SKIP(reason?)` | 返回**跳过标记**(`[kind: "test_skipped", reason]`);测试体**返回**它 ⇒ 该测试记 `skipped = TRUE`(`passed` 取 `FALSE`,CI 先看 `skipped`);`reason` 可选,给了**必须**是 `STRING` | `reason` 非 `STRING` → `E0030`;元数 > 1 → `E0022` | `O(1)` | R1 门面 + R2 内核 |
+| `TEST_CASES(name, cases, body)` | **参数化**注册:`cases` 是数组的数组,每个内层数组是一条用例的实参;每条注册为独立测试,名 `<name>[<下标>]` | `name` 非 `STRING` / `cases` 非 `ARRAY` / `body` 非函数 / 用例项非数组 → `E0030`;元数错 → `E0022` | `O(k)`(k = 用例数) | R1 门面 + R2 内核 |
+| `TEMP_DIR() -> STRING` | 造一个临时目录并返回**绝对路径**(相对路径会把测试文件写进工作树);**不**自动清理,调用方负责 | 造不出来 → `E0060` | — | R1 门面 + R2 内核 |
+| `RUN_TESTS_ASYNC() -> ARRAY` | **异步**跑一轮:整轮进任务作用域(测试体可 `SPAWN` + `AWAIT`),返回与 `RUN_TESTS` **同形**的记录数组(跳过 / 失败判别口径逐字相同) | 元数错 → `E0022` | — | R1 门面 + R2 内核 |
 
 **约定**:测试体**应当**以 `ASSERT` 族断言收尾并以 `TRUE` 结束;体求值期间逃逸的 `ERR` 使该项 `passed = FALSE`。
 
